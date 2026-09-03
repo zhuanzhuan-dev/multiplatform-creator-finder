@@ -1,0 +1,28 @@
+{
+  "port": 17927,
+  "token": "",
+  "larkCliPath": "lark-cli",
+  "baseToken": "UNZnbKinoauEBhsrpEsc8ZmCnlb",
+  "tableId": "tblYn9BPYgxRwtRy",
+  "viewId": "vewh2hbrCr",
+  "identity": "user",
+  "destination": {
+    "baseName": "贴片自动化",
+    "tableName": "数据表",
+    "viewName": "底表",
+    "wikiUrl": "https://zhuanspirit.feishu.cn/wiki/RJZJwCZv7iAeOAk84P0cn24An2b?table=tblYn9BPYgxRwtRy&view=vewh2hbrCr"
+  },
+  "fields": {
+    "platform": "平台",
+    "accountName": "账号名称",
+    "followers": "粉丝量",
+    "videoUrl": "视频链接",
+    "status": "状态",
+    "priority": "建联优先级",
+    "note": "备注"
+  },
+  "values": {
+    "platform": "抖音",
+    "status": "待绑定"
+  }
+}

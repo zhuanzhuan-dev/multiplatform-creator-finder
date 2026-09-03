@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+artifacts/
+bridge/bridge.config.json
+*.log
+.DS_Store
+
+# Parent repo ignores *.png; keep the extension icons tracked.
+!public/icons/
+!public/icons/*.png

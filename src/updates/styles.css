@@ -1,0 +1,35 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --canvas: #0d1012;
+  --surface: #15191c;
+  --line: #2b3237;
+  --text: #f3f6f7;
+  --muted: #9aa4aa;
+  --mint: #58d5a1;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 18px; background: radial-gradient(circle at 12% 0%, #19392f 0, transparent 34%), var(--canvas); color: var(--text); -webkit-font-smoothing: antialiased; }
+main { width: min(680px, 100%); }
+header { display: flex; align-items: center; gap: 20px; }
+.product-icon { width: clamp(72px, 16vw, 96px); height: auto; flex: 0 0 auto; }
+.eyebrow { margin: 0 0 10px; color: var(--mint); font-size: 12px; font-weight: 750; letter-spacing: .12em; }
+h1 { margin: 0; font-size: clamp(34px, 7vw, 58px); line-height: 1.05; letter-spacing: -.045em; }
+.lead { max-width: 610px; margin: 20px 0 28px; color: #cbd3d6; font-size: 17px; line-height: 1.75; }
+section { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: rgba(21, 25, 28, .92); }
+h2 { margin: 0; padding: 18px 20px; border-bottom: 1px solid var(--line); font-size: 15px; }
+ul { margin: 0; padding: 0; list-style: none; }
+li { display: grid; grid-template-columns: 112px 1fr; gap: 16px; padding: 18px 20px; }
+li + li { border-top: 1px solid #242a2f; }
+li strong { color: var(--mint); font-size: 13px; }
+li span { color: #c0c9cd; font-size: 14px; line-height: 1.65; }
+aside { margin-top: 14px; padding: 15px 18px; border-left: 3px solid #d8a849; background: #242016; color: #e4ce9a; font-size: 13px; line-height: 1.6; }
+footer { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 12px; }
+button { min-height: 42px; border: 1px solid #3ca77c; border-radius: 10px; padding: 0 20px; background: #288464; color: white; font: inherit; font-weight: 750; cursor: pointer; }
+button:focus-visible { outline: 2px solid #7bc7ff; outline-offset: 2px; }
+@media (max-width: 520px) {
+  header { align-items: flex-start; gap: 14px; }
+  .product-icon { width: 64px; }
+  li { grid-template-columns: 1fr; gap: 6px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
