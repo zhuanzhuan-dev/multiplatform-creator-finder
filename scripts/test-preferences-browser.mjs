@@ -96,8 +96,10 @@ try{
  assert.ok(await api(`document.documentElement.scrollWidth<=320`));
  const large=await cmd('Page.captureScreenshot',{format:'png'},panel);await writeFile(resolve(root,'test-results/preferences-large-type.png'),Buffer.from(large.data,'base64'));
  await api(`document.documentElement.style.fontSize='';document.querySelector('#themePreference').focus()`);
- await cmd('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},panel);
- await cmd('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},panel);
+ for(let i=0;i<10 && await open();i++){
+  await cmd('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},panel);
+  await cmd('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},panel);
+ }
  await waitFor(async()=>!await open(),'tab leaves settings');
  report.scenarios.push('theme-persists-and-close-outside-tab-and-large-type-work');
  // Only presentation data is stubbed here; this does not start collection or upload.
@@ -111,10 +113,10 @@ try{
  })()`);
  await waitFor(()=>api(`document.querySelector('.health-alert')?.innerText.includes('研究台上传失败')`),'visible error');
  assert.equal(await api(`document.querySelector('.health-details').open`),false);
- for(const label of ['待上传队列','下次定时','定时结果'])assert.equal(await api(`([...document.querySelectorAll('dt')].find(e=>e.textContent===${JSON.stringify(label)})).checkVisibility()`),false);
+ for(const label of ['待同步记录','下次定时','定时结果'])assert.equal(await api(`([...document.querySelectorAll('dt')].find(e=>e.textContent===${JSON.stringify(label)})).checkVisibility()`),false);
  await click('.health-details > summary');
- for(const label of ['待上传队列','下次定时','定时结果'])assert.ok(await api(`([...document.querySelectorAll('dt')].find(e=>e.textContent===${JSON.stringify(label)})).checkVisibility()`));
- assert.equal(await api(`document.querySelector('.mini-details dd').textContent`),'5 条');
+ for(const label of ['待同步记录','下次定时','定时结果'])assert.ok(await api(`([...document.querySelectorAll('dt')].find(e=>e.textContent===${JSON.stringify(label)})).checkVisibility()`));
+ assert.equal(await api(`[...document.querySelectorAll('.mini-details dt')].find(e=>e.textContent==='待同步记录').nextElementSibling.textContent`),'5 条');
  const result=await api(`(()=>{const d=[...document.querySelectorAll('dt')].find(e=>e.textContent==='定时结果').nextElementSibling;return {text:d.textContent,whiteSpace:getComputedStyle(d).whiteSpace,overflow:getComputedStyle(d).textOverflow,client:d.clientWidth,scroll:d.scrollWidth};})()`);
  assert.ok(result.text.endsWith('详细结果应完整显示。'));assert.equal(result.whiteSpace,'normal');assert.notEqual(result.overflow,'ellipsis');assert.ok(result.scroll<=result.client);
  report.scenarios.push('auxiliary-status-in-details-with-full-result-and-visible-error');

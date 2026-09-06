@@ -20,6 +20,8 @@ export function useExtensionState() {
   const [notice, setNotice] = useState<{ text: string; error: boolean }>({ text: "", error: false });
   const [busyAction, setBusyAction] = useState<string>("");
   const [bridgeChecking, setBridgeChecking] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const connectInFlight = useRef(false);
   const checkedConnection = useRef(false);
   const bridgeCheckInFlight = useRef(false);
   const settingsRequest = useRef(0);
@@ -51,8 +53,9 @@ export function useExtensionState() {
     } finally {
       bridgeCheckInFlight.current = false;
       setBridgeChecking(false);
+      await refresh().catch(() => undefined);
     }
-  }, [show]);
+  }, [show, refresh]);
 
   const saveSettings = useCallback(async (draft: SettingsDraft, autoSave = false) => {
     if (!snapshot) throw new Error("运行状态尚未加载");
@@ -89,7 +92,7 @@ export function useExtensionState() {
         reuseExistingTab: draft.scheduleReuseExistingTab,
         lateToleranceMinutes: draft.scheduleLateToleranceMinutes
       },
-      cloud: { ...(current.cloud || {}), enabled: draft.bridgeEnabled }
+      cloud: { ...(current.cloud || {}), enabled: true }
     };
     try {
       const response = await sendRuntime<SaveResponse>({ type: "DRA_SAVE_CONFIG", settings, saveDraft: autoSave });
@@ -118,7 +121,7 @@ export function useExtensionState() {
         rules: nextRules
       });
       setSnapshot((value) => value ? { ...value, settings: response.settings, rules: response.rules } : value);
-      show("高级筛选规则已保存");
+      show("视频与账号规则已保存");
       return response;
     } catch (error) {
       show(error instanceof Error ? error.message : String(error), true);
@@ -126,7 +129,7 @@ export function useExtensionState() {
     }
   }, [show, snapshot]);
 
-  const run = useCallback(async (action: "start" | "pause" | "stop", draft: SettingsDraft) => {
+  const run = useCallback(async (action: "start" | "resume" | "pause" | "stop", draft: SettingsDraft) => {
     setBusyAction(action);
     show("");
     try {
@@ -135,6 +138,9 @@ export function useExtensionState() {
         await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_START", tabId: tab.id });
+      } else if (action === "resume") {
+        show("正在恢复本轮，保留已有计数与记录…");
+        await sendRuntime({ type: "DRA_RESUME" });
       } else if (action === "pause") {
         await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId });
       } else {
@@ -150,6 +156,9 @@ export function useExtensionState() {
   }, [refresh, saveSettings, show, snapshot?.state?.feedTabId]);
 
   const connectCloud = useCallback(async () => {
+    if (connectInFlight.current) return;
+    connectInFlight.current = true;
+    setConnecting(true);
     try {
       const response = await sendRuntime<CloudResponse>({ type: "DRA_START_PAIR" });
       updateCloud(response.cloud);
@@ -157,6 +166,7 @@ export function useExtensionState() {
     } catch (error) {
       show(error instanceof Error ? error.message : String(error), true);
     }
+    finally { connectInFlight.current = false; setConnecting(false); }
   }, [show, updateCloud]);
 
   const disconnectCloud = useCallback(async () => {
@@ -225,6 +235,7 @@ export function useExtensionState() {
     notice,
     busyAction,
     bridgeChecking,
+    connecting,
     refresh,
     checkCloud,
     saveSettings,

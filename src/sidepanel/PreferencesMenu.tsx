@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ThemePicker } from "../shared/ThemePicker";
 
-export function PreferencesMenu() {
+export function PreferencesMenu({ children }: { children?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -47,6 +47,7 @@ export function PreferencesMenu() {
           </button>
         </div>
         <ThemePicker />
+        {children}
       </div>
     </div>
   );

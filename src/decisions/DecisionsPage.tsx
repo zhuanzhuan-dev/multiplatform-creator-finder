@@ -58,15 +58,15 @@ export function DecisionsPage() {
         <div>
           <p className="eyebrow">DISCOVERY / DECISION LOG</p>
           <h1>本轮判断记录</h1>
-          <p className="subtitle">查看自动找号助手在当前任务中做出的每一次判断。</p>
+          <p className="subtitle">保留本轮最近 100 条记录；刷新后保留，开始新一轮时重置。</p>
         </div>
         <span className={`run-status ${state?.status || "idle"}`}>{state?.status === "running" ? "实时更新中" : "本轮记录"}</span>
       </header>
 
       <section className="decision-rail" aria-label="判断结果汇总">
         <button className={filter === "all" ? "selected" : ""} onClick={() => setFilter("all")}><span>全部判断</span><strong>{decisions.length}</strong></button>
-        <button className={`good ${filter === "good" ? "selected" : ""}`} onClick={() => setFilter("good")}><span>规则命中</span><strong>{counts.good}</strong></button>
-        <button className={`review ${filter === "review" ? "selected" : ""}`} onClick={() => setFilter("review")}><span>需复核</span><strong>{counts.review}</strong></button>
+        <button className={`good ${filter === "good" ? "selected" : ""}`} onClick={() => setFilter("good")}><span>符合条件</span><strong>{counts.good}</strong></button>
+        <button className={`review ${filter === "review" ? "selected" : ""}`} onClick={() => setFilter("review")}><span>需人工确认</span><strong>{counts.review}</strong></button>
         <button className={`reject ${filter === "reject" ? "selected" : ""}`} onClick={() => setFilter("reject")}><span>淘汰与跳过</span><strong>{counts.reject}</strong></button>
       </section>
 

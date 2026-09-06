@@ -1,3 +1,5 @@
+import { contentSkipDecision } from "./lib/content-type.js";
+import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
 import {
   CLOUD_DESTINATION,
   MAX_INGEST_BYTES,
@@ -16,13 +18,14 @@ import { normalizeDecisionHistory, prependDecision } from "./lib/decision-histor
 import { makeCreatorKey } from "./lib/normalizers.js";
 import { evaluateCreatorRules, evaluateVideoRules, scoreCreator, validateRules } from "./lib/rule-engine.js";
 import { createRunWaits, runtimeStalled, stepBudget, withTimeout } from "./lib/runtime-health.js";
-import { getRunLimitReason, normalizeRunTarget } from "./lib/run-limits.js";
+import { canResumeRun, elapsedRunMs, getRunLimitReason, normalizeRunTarget } from "./lib/run-limits.js";
 import { nextScheduledOccurrence, validateSchedule } from "./lib/scheduler.js";
 import { firstRunnableTabInWindow, isRunnableRoute, launchUrl, resolveRoute } from "./src/core/platform-router.ts";
 
 const WATCHDOG_ALARM = "dra-watchdog";
 const SCHEDULE_ALARM = "dra-schedule-next";
 const RUN_STOP_ALARM = "dra-run-stop";
+const UPLOAD_ALARM = "dra-upload";
 const MAX_SEEN_VIDEOS = 5_000;
 const MAX_OUTBOX = 1_000;
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -40,6 +43,8 @@ let configQueue = Promise.resolve();
 let seenVideos = [];
 let creatorIndex = {};
 let outbox = [];
+let dailyStats = null;
+let flushInFlight = null;
 let cloudAuth = null;
 let pairing = null;
 const runWaits = createRunWaits();
@@ -73,6 +78,7 @@ async function initialize() {
     settings = mergeSettings(saved[STORAGE_KEYS.settings] || DEFAULT_SETTINGS);
     settingsDraft = saved[STORAGE_KEYS.settingsDraft] || null;
     rules = mergeRules(savedRules);
+    dailyStats = saved[STORAGE_KEYS.dailyStats] || null;
     const savedState = saved[STORAGE_KEYS.state] || {};
     state = {
       ...cloneInitialState(),
@@ -122,18 +128,21 @@ async function initialize() {
     });
     await syncScheduleAlarm();
     await syncRunStopAlarm();
+    await scheduleUpload();
     if (state.status === "running") await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
   })();
   return initialized;
 }
 
 async function persistState(notificationTabId = state.feedTabId) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.state]: state });
+  await chrome.storage.local.set({ [STORAGE_KEYS.state]: state, [STORAGE_KEYS.dailyStats]: dailyStats });
   chrome.runtime.sendMessage({ type: "DRA_STATUS_CHANGED", tabId: notificationTabId, state }).catch(() => undefined);
 }
 
 async function persistWorkData() {
   await chrome.storage.local.set({
+    [STORAGE_KEYS.state]: state,
+    [STORAGE_KEYS.dailyStats]: dailyStats,
     [STORAGE_KEYS.seenVideos]: seenVideos,
     [STORAGE_KEYS.creatorIndex]: creatorIndex,
     [STORAGE_KEYS.profileQueue]: [],
@@ -191,7 +200,8 @@ function pluginVersion() {
 
 function cloudStatusSnapshot() {
   return {
-    connected: Boolean(cloudAuth?.device_token),
+    connected: Boolean(cloudAuth?.device_token) && !cloudAuth?.expired,
+    expired: Boolean(cloudAuth?.expired),
     userId: cloudAuth?.user_id || "",
     pairedAt: cloudAuth?.pairedAt || "",
     destination: CLOUD_DESTINATION,
@@ -216,7 +226,7 @@ async function ensureHostFingerprint() {
 }
 
 function cloudReady() {
-  return Boolean(settings.cloud?.enabled && !settings.dryRun && cloudAuth?.device_token);
+  return Boolean(settings.cloud?.enabled && !settings.dryRun && cloudAuth?.device_token && !cloudAuth?.expired);
 }
 
 function dwellSecondsFor(observation) {
@@ -266,7 +276,7 @@ async function finalizeObservationTransition(recordId, transition = {}) {
   };
   item.transitionPending = false;
   await persistWorkData();
-  if (["pending", "write-error"].includes(item.status)) await flushOutbox({ force: false });
+  if (["pending", "write-error"].includes(item.status)) await scheduleUpload();
   return { ok: true, recordId };
 }
 
@@ -282,6 +292,10 @@ async function settleInterruptedTransitions() {
 }
 
 async function setPaused(reason, error = "") {
+  const now = Date.now();
+  state.elapsedMs = elapsedRunMs(state, now);
+  state.activeSince = null;
+  if (state.status !== "paused") state.pausedAt = now;
   state.status = "paused";
   runWaits.cancel();
   state.endedAt = new Date().toISOString();
@@ -601,8 +615,31 @@ function uploadableOutbox() {
   });
 }
 
-async function flushOutbox({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
-  if (settings.dryRun || !settings.cloud?.enabled || !cloudAuth?.device_token) return { status: "idle" };
+async function scheduleUpload(force = false, retry = false) {
+  const pending = uploadableOutbox();
+  if (!pending.length || !cloudReady()) { await chrome.alarms.clear(UPLOAD_ALARM); return; }
+  const oldest = Math.min(...pending.map(item => Date.parse(item.queuedAt) || Date.now()));
+  const when = retry || flushInFlight ? Date.now() + 30_000
+    : force || pending.length >= 10 ? Date.now() + 100 : Math.max(Date.now() + 100, oldest + 60_000);
+  const existing = await chrome.alarms.get(UPLOAD_ALARM);
+  if (!existing || existing.scheduledTime > when) await chrome.alarms.create(UPLOAD_ALARM, { when });
+}
+
+async function handleUploadAlarm() {
+  await initialize();
+  try { await flushOutbox({ force: true }); }
+  catch (error) { state.lastError = `研究台同步失败：${error?.message || String(error)}`; await persistState(); }
+  finally { await scheduleUpload(false, true); }
+}
+
+function flushOutbox(options = {}) {
+  if (flushInFlight) return flushInFlight;
+  flushInFlight = flushOutboxBatch(options).finally(() => { flushInFlight = null; });
+  return flushInFlight;
+}
+
+async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
+  if (!cloudReady()) return { status: "idle" };
   const pending = uploadableOutbox();
   if (!pending.length) return { status: "idle" };
   const oldest = Math.min(...pending.map((item) => Date.parse(item.queuedAt) || Date.now()));
@@ -633,8 +670,9 @@ async function flushOutbox({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
   }
 
   let result;
+  const uploadingAuth = cloudAuth;
   try {
-    result = await cloudClient.ingest(cloudAuth.device_token, body);
+    result = await cloudClient.ingest(uploadingAuth.device_token, body);
   } catch (error) {
     const message = error?.message || String(error);
     for (const item of rows) {
@@ -650,6 +688,10 @@ async function flushOutbox({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
 
   const kind = classifyIngestStatus(result.status);
   if (kind === "auth_error") {
+    if (cloudAuth !== uploadingAuth) return { status: "auth_error", reason: "connection_changed" };
+    if (cloudAuth) cloudAuth.expired = true;
+    await persistCloudAuth();
+    if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     state.lastError = "研究台授权已失效，请重新连接";
     await persistState();
     return { status: "auth_error", reason: result.payload?.error || "unauthorized" };
@@ -676,7 +718,7 @@ async function flushOutbox({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
       item.status = sets.duplicated.has(id) ? "duplicate" : "written";
       item.flushedAt = new Date().toISOString();
       item.error = "";
-      increment("uploaded");
+      if (item.sessionId === state.runId) increment("uploaded");
     } else if (sets.rejected.has(id) || item.attempts >= MAX_UPLOAD_ATTEMPTS) {
       item.status = "dead";
       item.error = sets.rejected.get(id) || "retry_exhausted";
@@ -691,22 +733,30 @@ async function flushOutbox({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
   return { status: "ok", accepted: sets.accepted.size, duplicated: sets.duplicated.size, rejected: sets.rejected.size };
 }
 
-async function retryWriteErrors(limit = 10) {
-  if (!cloudReady()) return;
-  const pending = uploadableOutbox().slice(0, limit);
-  if (!pending.length) return;
-  await flushOutbox({ force: true, limit });
-}
-
 async function checkCloudConnection() {
-  if (!cloudAuth?.device_token) throw new Error("尚未连接研究台。请先点击「连接研究台」完成配对。");
-  const result = await cloudClient.checkAuth(cloudAuth.device_token, pluginVersion());
-  if (result.status === 401) throw new Error("研究台授权已失效或被吊销，请重新连接。");
-  if (!result.ok && result.status !== 400) throw new Error(result.payload?.error || `研究台检测失败：${result.status}`);
+  if (!cloudAuth?.device_token) throw new Error("尚未连接研究台。请先点击「登录并连接研究台」完成授权。");
+  const auth = cloudAuth;
+  const result = await cloudClient.checkAuth(auth.device_token, pluginVersion());
+  if (cloudAuth !== auth) throw new Error("研究台连接已变更，请重试");
+  if (result.status === 401) {
+    cloudAuth.expired = true;
+    await persistCloudAuth();
+    if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
+    else await persistState();
+    throw new Error("研究台授权已失效，请重新登录并连接。");
+  }
+  if (!result.ok) throw new Error(result.payload?.error || `研究台检测失败：${result.status}`);
+  cloudAuth.expired = false;
+  await persistCloudAuth();
+  await scheduleUpload(true);
   return { ok: true, userId: cloudAuth.user_id || "", destination: CLOUD_DESTINATION };
 }
 
 async function startPairing() {
+  if (pairing?.status === "pending" && Date.parse(pairing.expiresAt) > Date.now()) {
+    await chrome.tabs.create({ url: pairing.pairUrl, active: true });
+    return cloudStatusSnapshot();
+  }
   const result = await cloudClient.startPairing();
   if (!result.ok) throw new Error(result.payload?.error || "发起研究台配对失败");
   const code = String(result.payload.code || "");
@@ -753,10 +803,12 @@ async function pollPairing() {
   };
   pairing = null;
   await persistCloudAuth();
+  await scheduleUpload(true);
   return cloudStatusSnapshot();
 }
 
 async function disconnectCloud() {
+  if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台已断开，请登录并连接后继续");
   cloudAuth = cloudAuth?.host_fingerprint ? { host_fingerprint: cloudAuth.host_fingerprint } : null;
   pairing = null;
   await persistCloudAuth();
@@ -826,7 +878,11 @@ async function handleObservation(observation, profile, panelRecovered = false) {
     await persistState();
     return { continue: true, action: "advance", decision: state.lastDecision };
   }
-  if (seenVideos.includes(fingerprint)) return { continue: true, action: "advance", duplicateVideo: true };
+  dailyStats = recordDailyScan(dailyStats, fingerprint);
+  if (seenVideos.includes(fingerprint)) {
+    await persistState();
+    return { continue: true, action: "advance", duplicateVideo: true };
+  }
 
   seenVideos.push(fingerprint);
   seenVideos = seenVideos.slice(-MAX_SEEN_VIDEOS);
@@ -841,8 +897,9 @@ async function handleObservation(observation, profile, panelRecovered = false) {
     await setPaused(videoDecision.reasons.join("；"));
     return { continue: false, decision: videoDecision };
   }
-  if (observation.isLive) {
-    increment("liveSkipped");
+  const contentSkip = contentSkipDecision(observation);
+  if (contentSkip) {
+    increment(contentSkip.counter);
     recordDecision(videoDecision, observation, profile);
     const queued = await enqueueObservation(observationRecord(observation, profile, {
       isRelevant: false,
@@ -947,7 +1004,7 @@ async function handleObservation(observation, profile, panelRecovered = false) {
   }
   recordDecision({
     code: payload.reviewRequired ? "ACCEPTED_REVIEW" : "ACCEPTED",
-    reasons: [score.level, ...(payload.reviewRequired ? ["已按B级写入，需人工复核"] : []), ...score.reasons],
+    reasons: [score.level, ...(payload.reviewRequired ? ["已保存为候选，需人工确认"] : []), ...score.reasons],
     accountName: payload.accountName
   }, observation, profile);
   await persistWorkData();
@@ -965,7 +1022,12 @@ async function handlePanelSkipped(observation, reason) {
   }
 
   const fingerprint = observation.videoId || [observation.secUid, observation.caption, observation.subtype].filter(Boolean).join("|");
-  if (fingerprint && !seenVideos.includes(fingerprint)) {
+  dailyStats = recordDailyScan(dailyStats, fingerprint);
+  if (fingerprint && seenVideos.includes(fingerprint)) {
+    await persistState();
+    return { continue: true, action: "advance", duplicateVideo: true };
+  }
+  if (fingerprint) {
     seenVideos.push(fingerprint);
     seenVideos = seenVideos.slice(-MAX_SEEN_VIDEOS);
     increment("scanned");
@@ -1023,6 +1085,13 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   await initialize();
   const problems = [...validateSettings(settings), ...validateRules(rules), ...validateSchedule(settings.schedule)];
   if (problems.length) throw new Error(problems.join("；"));
+  if (!settings.dryRun) {
+    await checkCloudConnection();
+    if (!settings.cloud?.enabled) {
+      settings.cloud = { ...settings.cloud, enabled: true };
+      await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
+    }
+  }
   let requested;
   if (trigger === "schedule") {
     requested = await scheduledFeedTab();
@@ -1086,10 +1155,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   }
   await persistState();
   try {
-    const cloudReadyCheck = settings.cloud?.enabled && !settings.dryRun
-      ? checkCloudConnection()
-      : Promise.resolve(null);
-    const [, tab] = await Promise.all([cloudReadyCheck, prepareFeedTab(requestedTab.id, state.runTrigger)]);
+    const tab = await prepareFeedTab(requestedTab.id, state.runTrigger);
     if (state.status !== "starting" || state.runId !== runId) {
       await detachDebugger(tab?.id);
       return state;
@@ -1098,6 +1164,9 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     state.startupStage = "";
     state.pauseReason = "";
     state.startedAt = new Date().toISOString();
+    state.elapsedMs = 0;
+    state.activeSince = Date.now();
+    state.pausedAt = null;
     state.stopAt = ["time", "both"].includes(effectiveTarget.mode)
       ? Date.now() + effectiveTarget.durationMinutes * 60_000
       : null;
@@ -1108,12 +1177,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     const runtimeStatus = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 2).catch(() => null);
     if (runtimeStatus) await applyPageRuntimeState(runtimeStatus);
     await persistState();
-    if (settings.cloud?.enabled && !settings.dryRun) {
-      retryWriteErrors().catch(async (error) => {
-        state.lastError = `研究台待上传队列同步失败：${error?.message || String(error)}`;
-        await persistState();
-      });
-    }
+    await scheduleUpload(true);
     return state;
   } catch (error) {
     if (state.runId === runId && isActiveRunStatus()) {
@@ -1123,10 +1187,71 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   }
 }
 
+async function resumeRun() {
+  await initialize();
+  if (!canResumeRun(state)) throw new Error("本轮已结束或达到目标，请开始新一轮");
+  const runId = state.runId;
+  const problems = [...validateSettings(settings), ...validateRules(rules)];
+  if (problems.length) throw new Error(problems.join("；"));
+  if (!settings.dryRun) {
+    await checkCloudConnection();
+    settings.cloud = { ...settings.cloud, enabled: true };
+    await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
+  }
+  if (state.runId !== runId || state.status !== "paused") throw new Error("任务状态已变化，请重试");
+  let tab = await requireFeedTab(state.feedTabId, { requireActive: false, requireFocused: false });
+  if (state.runId !== runId || state.status !== "paused") throw new Error("任务状态已变化，请重试");
+  const elapsedMs = elapsedRunMs(state);
+  const pausedAt = state.pausedAt || Date.parse(state.endedAt || "") || Date.now();
+  const previousRuntime = state.runtime;
+  state.status = "starting";
+  state.startupStage = "正在恢复本轮任务";
+  state.loopId = crypto.randomUUID();
+  state.elapsedMs = elapsedMs;
+  state.activeSince = null;
+  await persistState();
+  try {
+    tab = await waitForTabComplete(tab.id);
+    tab = await ensureContentRuntime(tab);
+    await keepFeedPageActive(tab.id);
+    if (state.runId !== runId || state.status !== "starting") return state;
+    const now = Date.now();
+    const shift = Math.max(0, now - pausedAt);
+    const resume = previousRuntime?.phase === "dwell" ? {
+      ...previousRuntime,
+      waitUntil: previousRuntime.waitUntil + shift,
+      deadlineAt: previousRuntime.deadlineAt + shift,
+      cycleStartedAt: previousRuntime.cycleStartedAt + shift
+    } : null;
+    state.status = "running";
+    state.activeSince = now;
+    state.pausedAt = null;
+    state.endedAt = null;
+    state.pauseReason = "";
+    state.lastError = "";
+    state.startupStage = "";
+    state.runtime = { phase: "idle", deadlineAt: now + 30_000, recoveryAttempts: 0 };
+    const target = normalizeRunTarget(state.runTarget || {});
+    state.stopAt = ["time", "both"].includes(target.mode) ? now + Math.max(0, target.durationMinutes * 60_000 - elapsedMs) : null;
+    if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
+    await syncRunStopAlarm();
+    await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
+    await persistState();
+    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId, loopId: state.loopId, resume });
+    await scheduleUpload(true);
+    return state;
+  } catch (error) {
+    if (state.runId === runId && isActiveRunStatus()) await setPaused("恢复本轮失败", error?.message || String(error));
+    throw error;
+  }
+}
+
 async function stopRun() {
   await initialize();
   const feedTabId = state.feedTabId;
   const closeFeedTab = state.createdByExtension === true;
+  state.elapsedMs = elapsedRunMs(state);
+  state.activeSince = null;
   state.status = "stopped";
   runWaits.cancel();
   if (feedTabId) await sendTabMessage(feedTabId, { type: "DRA_STOP_LOOP" }, 1).catch(() => undefined);
@@ -1150,7 +1275,7 @@ async function stopRun() {
   if (closeFeedTab && Number.isInteger(feedTabId)) {
     await chrome.tabs.remove(feedTabId).catch(() => undefined);
   }
-  await flushOutbox({ force: true }).catch(() => undefined);
+  await scheduleUpload(true);
   await persistState();
   return state;
 }
@@ -1196,7 +1321,7 @@ async function inspectRuntime() {
     await restartContentLoop(tab, runtimeStalled(state.runtime) ? "当前步骤超时且没有完成进展" : "页面循环中断");
   }
   await persistState();
-  await retryWriteErrors(3);
+  await scheduleUpload();
 }
 
 async function handleRunStopAlarm() {
@@ -1262,6 +1387,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
   if (alarm.name === RUN_STOP_ALARM) handleRunStopAlarm().catch((error) => setPaused("到点停止任务失败", error.message));
   if (alarm.name === SCHEDULE_ALARM) handleScheduledAlarm(alarm).catch((error) => {
@@ -1373,6 +1499,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           rules,
           teamDestination: TEAM_DESTINATION,
           cloud: cloudStatusSnapshot(),
+          daily: dailySnapshot(dailyStats),
           schedule: await getScheduleStatus(),
           queueLength: uploadableOutbox().length,
           outboxCount: uploadableOutbox().length,
@@ -1398,10 +1525,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true };
       case "DRA_START":
         return { ok: true, state: await startRun({ tabId: message.tabId }) };
+      case "DRA_RESUME":
+        return { ok: true, state: await resumeRun() };
       case "DRA_PAUSE":
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
         await setPaused("用户暂停");
-        await flushOutbox({ force: true }).catch(() => undefined);
+        await scheduleUpload(true);
         return { ok: true, state };
       case "DRA_STOP":
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");

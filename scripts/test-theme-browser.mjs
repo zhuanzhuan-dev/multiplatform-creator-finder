@@ -51,7 +51,7 @@ const choose=async value=>{
  await evaluate(pages[0].session,`(()=>{const s=document.querySelector('#themePreference');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
  await waitFor(()=>evaluate(pages[0].session,`chrome.storage.local.get('draTheme').then(v=>v.draTheme===${JSON.stringify(value)})`),'saved theme');
 };
-const screenshot=async(mode)=>{await delay(250);for(const p of pages){const r=await cmd('Page.captureScreenshot',{format:'png'},p.session);await writeFile(resolve(root,`test-results/theme-${p.name}-${mode}.png`),Buffer.from(r.data,'base64'));}};
+const screenshot=async(mode)=>{await evaluate(pages[0].session,`document.querySelector('button[aria-label="关闭设置"]')?.click()`);await delay(250);for(const p of pages){const r=await cmd('Page.captureScreenshot',{format:'png'},p.session);await writeFile(resolve(root,`test-results/theme-${p.name}-${mode}.png`),Buffer.from(r.data,'base64'));}};
 try{
  const w=(await cmd('Target.getTargets')).targetInfos.find(t=>t.url===`chrome-extension://${extensionId}/background.js`);const sw=await attach(w.targetId);
  for(const [name,path] of [['sidepanel','sidepanel/index.html'],['decisions','decisions/index.html'],['updates','updates/index.html']]) {
@@ -64,16 +64,16 @@ try{
  }
  await cmd('Target.detachFromTarget',{sessionId:sw});
  assert.equal(await evaluate(pages[0].session,`document.querySelector('#themePreference').value`),'system');
- await system('light');await expectTheme('system','rgb(245, 247, 248)');
+ await system('light');await expectTheme('system','rgb(233, 239, 235)');
  await system('dark');await expectTheme('system','rgb(13, 16, 18)');
  report.scenarios.push('default-system-follows-live-light-dark-changes-on-all-pages');
- await choose('light');await expectTheme('light','rgb(245, 247, 248)');await screenshot('light');
+ await choose('light');await expectTheme('light','rgb(233, 239, 235)');await screenshot('light');
  report.scenarios.push('explicit-light-overrides-dark-system-and-syncs-pages');
  await system('light');await choose('dark');await expectTheme('dark','rgb(13, 16, 18)');await screenshot('dark');
  report.scenarios.push('explicit-dark-overrides-light-system-and-syncs-pages');
  await cmd('Page.reload',{},pages[0].session);await waitFor(()=>evaluate(pages[0].session,`document.querySelector('#themePreference')?.value==='dark'`),'theme restored after reload');
  await expectTheme('dark','rgb(13, 16, 18)');report.scenarios.push('reload-retains-explicit-preference');
- await choose('system');await expectTheme('system','rgb(245, 247, 248)');
+ await choose('system');await expectTheme('system','rgb(233, 239, 235)');
  await system('dark');await expectTheme('system','rgb(13, 16, 18)');
  report.scenarios.push('return-to-system-resumes-live-appearance');
  // Theme is independent from collection settings and remains usable during a run.
@@ -81,6 +81,32 @@ try{
  await choose('light');await choose('dark');
  assert.deepEqual(await evaluate(pages[0].session,`chrome.storage.local.get('draSettings')`),before);
  report.scenarios.push('theme-does-not-change-run-settings');
+
+ // Evaluate the light material's text contrast at the darkest endpoint of each gradient.
+ await choose('light');
+ const materialChecks=await evaluate(pages[0].session,`(()=>{
+  const b=getComputedStyle(document.body),root=getComputedStyle(document.documentElement);
+  const rgb=value=>value.trim().startsWith('#')?[1,3,5].map(i=>parseInt(value.trim().slice(i,i+2),16)):(value.match(/[0-9.]+/g)||[]).slice(0,3).map(Number);
+  const lum=c=>c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0);
+  const contrast=(a,c)=>{const x=lum(a),y=lum(c);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05)};
+  const mix=(a,c,t)=>a.map((v,i)=>v*t+c[i]*(1-t));
+  const surface=rgb(b.getPropertyValue('--surface')),hover=rgb(b.getPropertyValue('--button-hover'));
+  const checks=[...document.querySelectorAll('.stats-section h2,.primary-stats dt,.primary-stats strong,.section-meta')].map(e=>({label:e.textContent,ratio:contrast(rgb(getComputedStyle(e).color),surface)}));
+  checks.push({label:'quiet-on-page-glow',ratio:contrast(rgb(b.getPropertyValue('--quiet')),rgb(b.getPropertyValue('--page-glow')))});
+  checks.push({label:'quiet-on-canvas',ratio:contrast(rgb(b.getPropertyValue('--quiet')),rgb(b.getPropertyValue('--canvas')))});
+  checks.push({label:'ordinary-button-at-glow-center',ratio:contrast(rgb(b.getPropertyValue('--text')),mix([91,150,116],hover,.22))});
+  checks.push({label:'link-button-at-glow-center',ratio:contrast(rgb(b.getPropertyValue('--blue')),mix([91,150,116],hover,.22))});
+  checks.push({label:'primary-reflection',ratio:contrast([255,255,255],mix([255,255,255],rgb(b.getPropertyValue('--primary')),.10))});
+  checks.push({label:'primary-follow-glow',ratio:contrast([255,255,255],mix([255,255,255],rgb(b.getPropertyValue('--primary-hover')),.16))});
+  return {checks,cardGradient:getComputedStyle(document.querySelector('.stats-section')).backgroundImage,shadow:root.getPropertyValue('--glass-shadow'),pointer:(()=>{const e=document.createElement('span');e.style.color='var(--pointer-glow-core)';document.body.append(e);const c=getComputedStyle(e).color;e.remove();return c;})()};
+ })()`);
+ assert.ok(materialChecks.checks.every(c=>c.ratio>=4.5),JSON.stringify(materialChecks.checks));
+ assert.ok(materialChecks.cardGradient.includes('linear-gradient'));
+ assert.ok(materialChecks.pointer.replaceAll(' ','').startsWith('rgba(91,150,116,'));
+ await choose('dark');
+ assert.equal(await evaluate(pages[0].session,`getComputedStyle(document.querySelector('.stats-section')).backgroundImage`),'none');
+ assert.equal(await evaluate(pages[0].session,`(()=>{const e=document.createElement('span');e.style.color='var(--pointer-glow-core)';document.body.append(e);const c=getComputedStyle(e).color;e.remove();return c;})()`),'rgba(255, 255, 255, 0.38)');
+ report.scenarios.push({name:'light-material-contrast-and-independent-dark-material',...materialChecks});
  await choose('system');await system('light');
  await evaluate(pages[0].session,`document.querySelector('.settings-disclosure').open=true;document.querySelector('.settings-disclosure').scrollIntoView()`);
  const settingsShot=await cmd('Page.captureScreenshot',{format:'png'},pages[0].session);await writeFile(resolve(root,'test-results/theme-settings-light.png'),Buffer.from(settingsShot.data,'base64'));

@@ -6,6 +6,9 @@ export interface Stats {
   duplicates?: number;
   notInterested?: number;
   liveSkipped?: number;
+  photoSkipped?: number;
+  adSkipped?: number;
+  unknownSkipped?: number;
   panelSkipped?: number;
   uploaded?: number;
 }
@@ -20,6 +23,10 @@ export interface Decision {
 }
 
 export interface RunState {
+  runId?: string;
+  elapsedMs?: number | null;
+  activeSince?: number | null;
+  pausedAt?: number | null;
   status?: "idle" | "starting" | "running" | "paused" | "stopped";
   feedTabId?: number | null;
   startedAt?: string | null;
@@ -91,12 +98,14 @@ export interface Pairing {
 
 export interface CloudState {
   connected?: boolean;
+  expired?: boolean;
   userId?: string;
   pairing?: Pairing | null;
   destination?: { name?: string; ingest?: string };
 }
 
 export interface Snapshot {
+  daily?: { date: string; scanned: number };
   state?: RunState;
   settings?: Settings;
   settingsDraft?: EditableNumbers<Settings> | null;
@@ -121,7 +130,6 @@ export interface SettingsDraft {
   keepSystemAwake: boolean;
   markRejectedNotInterested: boolean;
   dryRun: boolean;
-  bridgeEnabled: boolean;
   scheduleEnabled: boolean;
   scheduleWeekdays: number[];
   scheduleTimes: string[];
@@ -145,7 +153,6 @@ export function settingsDraft(settings: EditableNumbers<Settings> = {}): Setting
     keepSystemAwake: settings.keepSystemAwake !== false,
     markRejectedNotInterested: settings.markRejectedNotInterested !== false,
     dryRun: Boolean(settings.dryRun),
-    bridgeEnabled: settings.cloud?.enabled !== false,
     scheduleEnabled: settings.schedule?.enabled !== false,
     scheduleWeekdays: settings.schedule?.weekdays ?? [2, 3, 4, 5, 6],
     scheduleTimes: settings.schedule?.times ?? ["11:15", "13:30", "16:00", "18:00", "20:00", "23:00"],
@@ -219,7 +226,7 @@ export function rulesDraft(value: unknown): RuleSettings {
   return {
     ...source,
     version: Number(source.version || FALLBACK_RULES.version),
-    includeLive: Boolean(source.includeLive),
+    includeLive: false,
     hard: {
       minVideoDurationSeconds: Number(hard.minVideoDurationSeconds ?? FALLBACK_RULES.hard.minVideoDurationSeconds),
       minVideoLikes: Number(hard.minVideoLikes ?? FALLBACK_RULES.hard.minVideoLikes),

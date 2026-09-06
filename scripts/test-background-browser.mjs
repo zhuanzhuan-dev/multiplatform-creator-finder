@@ -118,7 +118,16 @@ try{
  report.scenarios.push('steady-background-timing');
  }
  const stopped=await request({type:'DRA_PAUSE',tabId:feedTabId});assert.equal(stopped.ok,true);
- const pausedCount=(await state()).stats.scanned;await delay(6000);assert.equal((await state()).stats.scanned,pausedCount);report.scenarios.push('pause-cancels-work');
+ const pausedSnapshot=await state();const pausedCount=pausedSnapshot.stats.scanned;
+ await delay(6000);assert.equal((await state()).stats.scanned,pausedCount);report.scenarios.push('pause-cancels-work');
+ const resumed=await request({type:'DRA_RESUME'});assert.equal(resumed.ok,true,JSON.stringify(resumed));
+ assert.equal(resumed.state.runId,pausedSnapshot.runId);assert.equal(resumed.state.startedAt,pausedSnapshot.startedAt);
+ assert.equal(resumed.state.stats.scanned,pausedCount);assert.equal(resumed.state.recentDecisions.length,pausedSnapshot.recentDecisions.length);
+ assert.ok(resumed.state.stopAt-pausedSnapshot.stopAt>=6000,'paused interval is excluded from target');
+ await delay(1000);await request({type:'DRA_PAUSE',tabId:feedTabId});
+ const pausedAgain=await state();assert.ok(pausedAgain.elapsedMs-pausedSnapshot.elapsedMs<5000,'paused wall time excluded from active duration');
+ report.scenarios.push('resume-preserves-run-results-and-excludes-pause-time');
+ console.log(JSON.stringify({scenario:'resume-preserved-results',passed:true}));
  if(process.env.LIVE_RUN!=='1'&&process.env.FOREGROUND_BASELINE!=='1'){
  const waitState=async(predicate,timeout=15000)=>{const end=Date.now()+timeout;while(Date.now()<end){const value=await state();if(predicate(value))return value;await delay(250);}throw new Error('State condition timed out: '+JSON.stringify(await state()));};
  // Refresh while waiting: preserve the run and its real stop deadline.

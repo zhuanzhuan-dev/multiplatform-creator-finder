@@ -32,13 +32,16 @@ export function formatRelativeTime(value?: string, now = Date.now()): string {
 
 export function decisionMeta(code = ""): { label: string; tone: string } {
   const value = code.toUpperCase();
-  if (value === "ACCEPTED") return { label: "规则命中", tone: "good" };
-  if (value.includes("REVIEW")) return { label: "需复核", tone: "review" };
+  if (value === "ACCEPTED") return { label: "符合条件", tone: "good" };
+  if (value.includes("REVIEW")) return { label: "需人工确认", tone: "review" };
+  if (value === "AD_SKIPPED") return { label: "跳过广告", tone: "reject" };
+  if (value === "PHOTO_SKIPPED") return { label: "跳过图文", tone: "reject" };
+  if (value === "UNKNOWN_TYPE_SKIPPED") return { label: "类型未确认", tone: "reject" };
   if (value.includes("LIVE")) return { label: "跳过直播", tone: "reject" };
-  if (value.includes("DUPLICATE")) return { label: "去重拦截", tone: "reject" };
-  if (value.includes("PANEL") || value.includes("MISSING") || value.includes("INVALID")) return { label: "读取跳过", tone: "review" };
-  if (["REJECT", "BLACKLIST", "DURATION", "LIKES"].some((keyword) => value.includes(keyword))) {
-    return { label: "不感兴趣", tone: "reject" };
+  if (value.includes("DUPLICATE")) return { label: "重复发现", tone: "reject" };
+  if (value.includes("PANEL") || value.includes("MISSING") || value.includes("INVALID")) return { label: "资料未读全", tone: "review" };
+  if (["REJECT", "BLACKLIST", "RISK", "TOO_SHORT", "DURATION", "LIKES"].some((keyword) => value.includes(keyword))) {
+    return { label: "未符合条件", tone: "reject" };
   }
   return { label: "已处理", tone: "reject" };
 }

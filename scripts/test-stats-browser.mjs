@@ -76,19 +76,19 @@ try{
  if(!process.env.BASELINE) {
   assert.equal(await api(`document.querySelector('.stats-details').open`),false);
   assert.equal(await api(`document.querySelector('.stats-breakdown').checkVisibility()`),false);
-  assert.ok(await api(`document.querySelector('.stats-details summary').innerText.includes('13')&&document.querySelector('.stats-details summary').innerText.includes('12')`));
+  assert.ok(await api(`document.querySelector('.stats-details summary').innerText.includes('13')&&!document.querySelector('.stats-details summary').innerText.includes('已上传')`));
   await cmd('Page.bringToFront',{},panel);
   await api(`document.querySelector('.stats-details summary').focus()`);
   assert.equal(await api(`document.activeElement.matches('.stats-details summary')`),true);
   await cmd('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r',unmodifiedText:'\r'},panel);
   await cmd('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},panel);
   await waitFor(()=>api(`document.querySelector('.stats-details').open`),'keyboard expanded');
-  assert.deepEqual(await api(`[...document.querySelectorAll('.stats-breakdown dd')].map(e=>e.textContent)`),['3','5','0','0']);
+  assert.deepEqual(await api(`[...document.querySelectorAll('.stats-breakdown dd')].map(e=>e.textContent)`),['3','5','0','0','0','0','0']);
   await api(`window.statsFixture={scanned:26,matched:16,newCreators:10,reviewQueued:0,duplicates:6,notInterested:10,liveSkipped:0,panelSkipped:2,uploaded:24};document.dispatchEvent(new Event('visibilitychange'))`);
   await waitFor(()=>api(`document.querySelector('.primary-stats strong').textContent==='16'`),'live refresh');
   assert.equal(await api(`document.querySelector('.stats-details').open`),true);
   assert.equal(await api(`!!document.querySelector('.primary-stats .review')`),false);
-  assert.deepEqual(await api(`[...document.querySelectorAll('.stats-breakdown dd')].map(e=>e.textContent)`),['6','10','0','2']);
+  assert.deepEqual(await api(`[...document.querySelectorAll('.stats-breakdown dd')].map(e=>e.textContent)`),['6','10','0','0','0','0','2']);
   report.scenarios.push('keyboard-expands-details-live-counts-update-without-collapsing-zero-review-is-neutral');
   await cmd('Emulation.setDeviceMetricsOverride',{width:320,height:900,deviceScaleFactor:1,mobile:false},panel);
   await api(`document.documentElement.style.fontSize='32px'`);await delay(100);

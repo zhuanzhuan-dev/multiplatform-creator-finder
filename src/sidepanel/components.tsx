@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { canResumeRun, elapsedRunMs } from "../../lib/run-limits.js";
+import { useState } from "react";
 import { NumberInput, inputNumber } from "../shared/NumberInput";
 import { decisionMeta, decisionsFor, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
 import { RadarDisplay } from "./RadarDisplay";
@@ -15,12 +16,7 @@ const STATUS_LABELS: Record<string, string> = {
 const COLLAPSED_DECISION_COUNT = 5;
 
 function runningTime(state: RunState, now: number): string {
-  const startedAt = Date.parse(state.startedAt || "");
-  if (!Number.isFinite(startedAt)) return "00:00:00";
-  const active = state.status === "starting" || state.status === "running";
-  const recordedEnd = Date.parse(state.endedAt || state.lastTickAt || "");
-  const endAt = active ? now : Number.isFinite(recordedEnd) ? recordedEnd : startedAt;
-  return formatDuration(endAt - startedAt);
+  return formatDuration(elapsedRunMs(state, now));
 }
 
 function targetProgress(state: RunState): string {
@@ -39,20 +35,23 @@ interface RunOverviewProps {
   schedule?: Snapshot["schedule"];
   now: number;
   busyAction: string;
+  startDisabled?: boolean;
   onStart(): void;
+  onResume(): void;
   onPause(): void;
   onStop(): void;
 }
 
-export function RunOverview({ state, cloud, outboxCount, schedule, now, busyAction, onStart, onPause, onStop }: RunOverviewProps) {
+export function RunOverview({ state, cloud, outboxCount, schedule, now, busyAction, startDisabled, onStart, onResume, onPause, onStop }: RunOverviewProps) {
   const active = state.status === "starting" || state.status === "running";
-  const uploadHealth = cloud?.connected ? outboxCount > 0 ? `待上传 ${outboxCount} 条` : "上传正常" : "研究台未连接";
+  const resumable = canResumeRun(state);
+  const uploadHealth = cloud?.connected ? outboxCount > 0 ? `待同步 ${outboxCount} 条` : "同步正常" : "研究台未连接";
   const phaseLabels: Record<string, string> = { read: "读取视频", profile: "读取达人", dwell: "等待切换", submit: "保存结果", transition: "切换视频", idle: "准备下一条" };
   const runtimeHealth = state.runtime?.deadlineAt && now > state.runtime.deadlineAt + 15_000
     ? "当前步骤超时，等待自动恢复"
     : phaseLabels[state.runtime?.phase || ""] || "准备运行";
   const health = state.status === "paused"
-      ? `已暂停 · ${state.pauseReason || state.lastError || "等待继续"}`
+      ? state.pauseReason || state.lastError || "等待继续"
     : state.status === "starting"
       ? state.startupStage || "正在绑定当前标签页"
       : state.status === "running"
@@ -75,14 +74,16 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
       </div>
       <div className="actions">
         {active
-          ? <button className="primary" disabled={busyAction === "pause" || state.status === "starting"} onClick={onPause}>暂停</button>
-          : <button className="primary" disabled={Boolean(busyAction)} onClick={onStart}>{busyAction === "start" ? "启动中…" : "开始本轮"}</button>}
+          ? <button className="primary" disabled={Boolean(busyAction) || state.status === "starting"} onClick={onPause}>暂停</button>
+          : <button className="primary" disabled={Boolean(busyAction) || startDisabled} onClick={resumable ? onResume : onStart}>{busyAction === "resume" ? "恢复中…" : busyAction === "start" ? "启动中…" : resumable ? "继续本轮" : state.runId ? "开始新一轮" : "开始本轮"}</button>}
         <button className="danger-secondary" disabled={Boolean(busyAction) || state.status === "idle" || state.status === "stopped"} onClick={onStop}>停止本轮</button>
       </div>
       <details className="health-details">
-        <summary><span>{health}{state.lastError && !health.includes(state.lastError) ? <span className="health-alert">最近异常：{state.lastError}</span> : null}</span><span className="detail-action">查看详情</span></summary>
+        <summary><span className="run-health"><StatusBadge status={state.status} /><span>{health}{state.lastError && !health.includes(state.lastError) ? <span className="health-alert">最近异常：{state.lastError}</span> : null}</span></span><span className="detail-action">查看详情</span></summary>
         <dl className="mini-details">
-          <div><dt>待上传队列</dt><dd>{outboxCount} 条</dd></div>
+          <div><dt>同步方式</dt><dd>后台独立同步，暂停找号后继续处理队列</dd></div>
+          <div><dt>待同步记录</dt><dd>{outboxCount} 条</dd></div>
+          <div><dt>本轮已同步</dt><dd>{state.stats?.uploaded || 0} 条</dd></div>
           <div><dt>下次定时</dt><dd>{schedule?.enabled ? formatLocalDateTime(schedule.nextRunAt) : "已停用"}</dd></div>
           <div><dt>定时结果</dt><dd>{schedule?.lastResult ? `${formatLocalDateTime(schedule.lastRunAt)}｜${schedule.lastResult}` : "—"}</dd></div>
           <div><dt>暂停原因</dt><dd>{state.pauseReason || "—"}</dd></div>
@@ -100,7 +101,7 @@ export function RecentDecisions({ state, now }: { state: RunState; now: number }
   const openDecisionHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
-      <div className="section-heading"><h2 id="decisionTitle">最近判断</h2><span className="section-meta">共 {decisions.length} 条</span></div>
+      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">本轮 · 最近 {visibleDecisions.length} 条</span></div>
       <div className="decision-list" id="recentDecisionList">
         {decisions.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : visibleDecisions.map((decision, index) => {
           const meta = decisionMeta(decision.code);
@@ -122,7 +123,7 @@ export function RecentDecisions({ state, now }: { state: RunState; now: number }
           type="button"
           onClick={() => void openDecisionHistory()}
         >
-          在完整页面查看（{decisions.length}）
+          查看本轮记录（{decisions.length}{decisions.length === 100 ? " · 最多保留 100 条" : ""}）
         </button>
       ) : null}
     </section>
@@ -138,28 +139,32 @@ function stat(stats: Stats, key: keyof Stats): number {
   return Number(stats[key] || 0);
 }
 
-export function StatsOverview({ state, now }: { state: RunState; now: number }) {
+export function StatsOverview({ state, now, daily }: { state: RunState; now: number; daily?: Snapshot["daily"] }) {
   const stats = state.stats || {};
   return (
     <section className="stats-section" aria-labelledby="statsTitle">
-      <div className="section-heading"><h2 id="statsTitle">运行概览</h2><span className="section-meta" title={state.lastTickAt ? `${formatRelativeTime(state.lastTickAt, now)}更新` : "等待更新"}>本轮累计</span></div>
+      <div className="section-heading"><h2 id="statsTitle">本轮结果</h2><span className="section-meta" title="按北京时间统计，当天同一内容只计一次；保存在当前浏览器">今日已刷 <strong>{daily?.date === new Date(now + 8 * 3600000).toISOString().slice(0, 10) ? daily.scanned : 0}</strong></span></div>
       <dl className="primary-stats">
-        <div><dt>规则命中</dt><dd><strong>{stat(stats, "matched")}</strong></dd></div>
-        <div><dt>新增账号</dt><dd><strong>{stat(stats, "newCreators")}</strong></dd></div>
-        <div className={stat(stats, "reviewQueued") > 0 ? "review" : "neutral"}><dt>需复核入表</dt><dd><strong>{stat(stats, "reviewQueued")}</strong></dd></div>
+        <div><dt title="通过初筛的内容次数，包含需人工确认和重复发现">符合条件</dt><dd><strong>{stat(stats, "matched")}</strong></dd></div>
+        <div><dt>新发现账号</dt><dd><strong>{stat(stats, "newCreators")}</strong></dd></div>
+        <div className={stat(stats, "reviewQueued") > 0 ? "review" : "neutral"}><dt title="本轮新发现中需要人工确认的账号数，非实时待办数">需人工确认</dt><dd><strong>{stat(stats, "reviewQueued")}</strong></dd></div>
       </dl>
       <details className="stats-details">
         <summary>
-          <span className="stats-throughput"><span>已刷 <strong>{stat(stats, "scanned")}</strong></span><span>已上传 <strong>{stat(stats, "uploaded")}</strong></span></span>
+          <span className="stats-throughput"><span>本轮已刷 <strong>{stat(stats, "scanned")}</strong></span></span>
           <span className="stats-detail-action"><span className="when-closed">过程明细</span><span className="when-open">收起明细</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></span>
         </summary>
         <dl className="stats-breakdown">
-          <div><dt>去重拦截</dt><dd>{stat(stats, "duplicates")}</dd></div>
+          <div><dt>重复发现</dt><dd>{stat(stats, "duplicates")}</dd></div>
           <div><dt>已标记不感兴趣</dt><dd>{stat(stats, "notInterested")}</dd></div>
           <div><dt>跳过直播</dt><dd>{stat(stats, "liveSkipped")}</dd></div>
-          <div><dt>侧栏失败跳过</dt><dd>{stat(stats, "panelSkipped")}</dd></div>
+          <div><dt>跳过图文</dt><dd>{stat(stats, "photoSkipped")}</dd></div>
+          <div><dt>跳过广告</dt><dd>{stat(stats, "adSkipped")}</dd></div>
+          <div><dt>类型未确认</dt><dd>{stat(stats, "unknownSkipped")}</dd></div>
+          <div><dt>账号资料读取失败</dt><dd>{stat(stats, "panelSkipped")}</dd></div>
         </dl>
       </details>
+      <RecentDecisions state={state} now={now} />
     </section>
   );
 }
@@ -175,27 +180,16 @@ interface CloudPanelProps {
 export function CloudPanel({ snapshot, checking, onCheck, onConnect, onDisconnect }: CloudPanelProps) {
   const cloud = snapshot.cloud || {};
   const pending = cloud.pairing?.status === "pending" && Boolean(cloud.pairing.code);
-  const [open, setOpen] = useState(Boolean(pending));
-  useEffect(() => { if (pending) setOpen(true); }, [pending]);
-  const status = pending ? "等待确认" : cloud.connected ? "已连接" : checking ? "检测中" : "未连接";
-  const tone = pending || checking ? "pending" : cloud.connected ? "ready" : "error";
-  const summary = pending ? "配对等待确认" : cloud.connected ? `${snapshot.outboxCount || 0} 条待上传` : "连接后自动上传";
-  const destination = cloud.destination || snapshot.teamDestination || {};
-
   return (
-    <details className="disclosure" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary><span><strong>研究台上传</strong><span className="summary-copy">{summary}</span></span><span className={`connection ${tone}`}>{status}</span></summary>
-      <div className="disclosure-body">
-        <p className="destination">{destination.name || destination.ingest || "研究台 · No Swipe ingest"}</p>
-        <p className="destination-note">平台观察统一上传到研究台；命中账号会进入达人库，视频能力接入后沿用同一数据入口。</p>
-        {pending ? <p className="pair-code">{cloud.pairing?.code}</p> : null}
-        <div className="bridge-actions">
-          <button disabled={checking || !cloud.connected} onClick={onCheck}>{checking ? "检测中…" : "检测连接"}</button>
-          <button onClick={onConnect}>{pending || cloud.connected ? "重新连接" : "连接研究台"}</button>
-          {pending || cloud.connected ? <button className="danger-text" onClick={onDisconnect}>{pending ? "取消配对" : "断开"}</button> : null}
-        </div>
+    <section className="cloud-panel" aria-label="研究台连接">
+      <strong>{pending ? "等待研究台授权" : cloud.expired ? "请重新登录并连接" : cloud.connected ? "研究台已连接" : "登录并连接研究台"}</strong>
+      <p className="field-note">{pending ? "请在已打开的研究台页面登录并确认授权，完成后这里会自动更新。" : cloud.connected ? `发现结果会自动同步到研究台，当前待同步 ${snapshot.outboxCount || 0} 条。` : "首次使用请完成登录授权，连接成功后即可开始找号。"}</p>
+      <div className="bridge-actions">
+        <button className={cloud.connected ? "" : "primary"} disabled={checking} onClick={onConnect}>{pending ? "重新打开授权页" : cloud.connected ? "切换账号" : cloud.expired ? "重新登录并连接" : "登录并连接研究台"}</button>
+        {cloud.connected ? <button disabled={checking} onClick={onCheck}>{checking ? "检测中…" : "检测连接"}</button> : null}
+        {pending || cloud.connected ? <button className="danger-text" onClick={onDisconnect}>{pending ? "取消连接" : "断开连接"}</button> : null}
       </div>
-    </details>
+    </section>
   );
 }
 
@@ -260,7 +254,8 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
         </section>
 
         <section className="setting-group" aria-labelledby="targetSettingTitle">
-          <div className="setting-heading"><strong id="targetSettingTitle">本轮目标</strong><span>达到任一启用条件即停止</span></div>
+          <div className="setting-heading"><strong id="targetSettingTitle">任务目标</strong><span>达到任一启用条件即停止</span></div>
+          <p className="field-note">继续本轮会沿用原目标，暂停时间不计入时长。修改后的目标在新一轮生效。</p>
           <div className="form-grid">
             <label>停止方式<select value={draft.targetMode} disabled={disabled} onChange={(event) => onChange({ ...draft, targetMode: event.target.value as SettingsDraft["targetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label>
             {draft.targetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.targetDurationMinutes} disabled={disabled} onChange={number("targetDurationMinutes")} /></label> : null}
@@ -293,8 +288,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
           <label className="check"><input type="checkbox" checked={draft.keepSystemAwake} disabled={disabled} onChange={checkbox("keepSystemAwake")} />运行期间保持系统唤醒</label>
           <label className="check"><input type="checkbox" checked={draft.markRejectedNotInterested} disabled={disabled} onChange={checkbox("markRejectedNotInterested")} />淘汰内容后标记为不感兴趣</label>
           <p className="field-note shortcut-note">通过抖音网页的 R 快捷键执行。</p>
-          <label className="check"><input type="checkbox" checked={draft.dryRun} disabled={disabled} onChange={checkbox("dryRun")} />测试模式（不上传）</label>
-          <label className="check"><input type="checkbox" checked={draft.bridgeEnabled} disabled={disabled} onChange={checkbox("bridgeEnabled")} />启用研究台上传</label>
+
         </div>
         <div className="settings-actions">
           <button className="primary compact" disabled={disabled} onClick={onSave}>保存设置</button>
@@ -351,10 +345,10 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
 
   return (
     <details className="disclosure rules-disclosure">
-      <summary><span><strong>高级筛选规则</strong><span className="summary-copy">门槛、类目与黑名单</span></span></summary>
+      <summary><span><strong>视频与账号规则</strong><span className="summary-copy">想找的内容与排除条件</span></span></summary>
       <div className="disclosure-body rules-form">
         <section className="setting-group" aria-labelledby="hardRulesTitle">
-          <div className="setting-heading"><strong id="hardRulesTitle">基础门槛</strong><span>先判断视频，再判断达人</span></div>
+          <div className="setting-heading"><strong id="hardRulesTitle">视频与账号条件</strong><span>先判断视频，再判断达人</span></div>
           <div className="form-grid">
             <label>最短视频（秒）<NumberInput min="1" value={draft.hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
             <label>最低点赞<NumberInput min="0" value={draft.hard.minVideoLikes} disabled={disabled} onChange={setHard("minVideoLikes")} /></label>
@@ -362,12 +356,12 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
             <label>最低粉丝<NumberInput min="0" value={draft.hard.minFollowers} disabled={disabled} onChange={setHard("minFollowers")} /></label>
             <label>最高粉丝<NumberInput min="0" value={draft.hard.maxFollowers} disabled={disabled} onChange={setHard("maxFollowers")} /></label>
           </div>
-          <label className="check"><input type="checkbox" checked={draft.includeLive} disabled={disabled} onChange={(event) => onChange({ ...draft, includeLive: event.target.checked })} />将直播卡片纳入判断</label>
+          <p className="field-note">仅筛选普通视频。直播（含图文直播）、图文、广告及类型未确认的内容会自动跳过。</p>
         </section>
 
         <section className="setting-group" aria-labelledby="newAccountRulesTitle">
           <div className="setting-heading inline-heading">
-            <span><strong id="newAccountRulesTitle">低粉新号例外</strong><small>低于粉丝下限时，满足以下条件仍可进入复核</small></span>
+            <span><strong id="newAccountRulesTitle">低粉新号例外</strong><small>低于粉丝下限时，满足以下条件仍可交给人工确认</small></span>
             <input aria-label="启用低粉新号例外" type="checkbox" checked={draft.lowFollowerNewAccount.enabled} disabled={disabled} onChange={(event) => setLowFollower("enabled", event.target.checked)} />
           </div>
           <div className={`form-grid ${draft.lowFollowerNewAccount.enabled ? "" : "disabled-fields"}`}>
@@ -378,7 +372,8 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
         </section>
 
         <section className="setting-group" aria-labelledby="categoryRulesTitle">
-          <div className="setting-heading"><strong id="categoryRulesTitle">账号类目</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
+          <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
+          <p className="field-note">按视频描述、话题及账号资料中的关键词初筛。未匹配类别但满足其他条件的账号，仍保存为候选，交给人工确认。</p>
           <div className="category-list">
             {draft.positiveCategories.map((category, index) => (
               <details className="category-editor" key={category.id}>
@@ -399,16 +394,16 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
               </details>
             ))}
           </div>
-          <button className="add-category" disabled={disabled} onClick={addCategory}>＋ 添加账号类目</button>
+          <button className="add-category" disabled={disabled} onClick={addCategory}>＋ 添加内容类别</button>
         </section>
 
         <section className="setting-group" aria-labelledby="blacklistRulesTitle">
-          <div className="setting-heading"><strong id="blacklistRulesTitle">游戏黑名单</strong><span>命中后直接淘汰</span></div>
-          <label>游戏名称<textarea rows={3} value={draft.gameBlacklist.join("、")} disabled={disabled} placeholder="和平精英、我的世界" onChange={(event) => onChange({ ...draft, gameBlacklist: terms(event.target.value) })} /></label>
-          <p className="field-note">使用逗号、顿号或换行分隔。</p>
+          <div className="setting-heading"><strong id="blacklistRulesTitle">不需要的内容</strong><span>包含排除词时跳过</span></div>
+          <label>排除关键词<textarea rows={3} value={draft.gameBlacklist.join("、")} disabled={disabled} placeholder="和平精英、我的世界" onChange={(event) => onChange({ ...draft, gameBlacklist: terms(event.target.value) })} /></label>
+          <p className="field-note">适用于任何不需要的内容，使用逗号、顿号或换行分隔。匹配视频描述、话题及账号简介、作品文字等可读取信息中的关键词，不仅限于话题标签。排除条件优先。</p>
         </section>
 
-        <button className="primary compact save-rules" disabled={disabled} onClick={onSave}>保存高级规则</button>
+        <button className="primary compact save-rules" disabled={disabled} onClick={onSave}>保存规则</button>
       </div>
     </details>
   );

@@ -1,3 +1,4 @@
+import { contentSkipDecision } from "../lib/content-type.js";
 import { sampleDwellSeconds } from "../lib/dwell.js";
 
 (function installDouyinAutomation() {
@@ -97,10 +98,11 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       const deadline = Date.now() + timeoutMs;
       let observation = initialObservation;
       while (Date.now() < deadline && running) {
-        if (observation?.blockedReason || observation?.isLive) return observation;
+        const skip = observation && contentSkipDecision(observation);
+        if (observation?.blockedReason || skip && skip.code !== "UNKNOWN_TYPE_SKIPPED") return observation;
         const hasIdentity = Boolean(observationFingerprint(observation));
         const hasCreator = Boolean(observation?.authorName || observation?.secUid || observation?.profileUrl);
-        if (hasIdentity && hasCreator && hasPositiveNumber(observation?.durationSeconds) && hasFiniteNumber(observation?.likes)) {
+        if (!skip && hasIdentity && hasCreator && hasPositiveNumber(observation?.durationSeconds) && hasFiniteNumber(observation?.likes)) {
           return observation;
         }
         await sleep(300);
@@ -364,7 +366,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
 
         let profile = null;
         let panelRecovered = false;
-        if (!observation.isLive) {
+        if (!contentSkipDecision(observation)) {
           if (!observation.authorName && !observation.secUid && !observation.profileUrl) {
             throw new Error("当前推荐卡片仍未加载达人身份");
           }
@@ -381,7 +383,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           }
         }
 
-        const targetDwellMs = resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : observation.isLive ? liveDwellMs : sampleDwellSeconds(dwellPolicy) * 1_000;
+        const targetDwellMs = resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : contentSkipDecision(observation) ? liveDwellMs : sampleDwellSeconds(dwellPolicy) * 1_000;
         const waitUntil = resumedDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
         await progress("dwell", { waitUntil, cycleStartedAt: tickStartedAt, plannedDwellSeconds: targetDwellMs / 1_000 });
         const remainingDwellMs = Math.max(0, waitUntil - Date.now());
@@ -496,7 +498,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
     if (message?.type === "DRA_PARSE_FEED") {
       try {
         const observation = parser.parseCurrentFeed(document);
-        sendResponse({ ok: true, observation, profile: observation?.isLive ? null : parser.parseCreatorPanel(document, observation) });
+        sendResponse({ ok: true, observation, profile: observation && contentSkipDecision(observation) ? null : parser.parseCreatorPanel(document, observation) });
       } catch (error) {
         sendResponse({ ok: false, error: error?.message || String(error) });
       }

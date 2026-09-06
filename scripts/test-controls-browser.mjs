@@ -88,8 +88,12 @@ try{
  report.scenarios.push('blank-rule-rejected-without-overwriting-saved-zero');
  await cmd('Emulation.setDeviceMetricsOverride',{width:360,height:900,deviceScaleFactor:1,mobile:false},panel);
  // A harmless preset button provides real pointer press/release feedback without starting collection.
- await api(`document.querySelector('.preset-button').scrollIntoView({block:'center'})`);
+ await cmd('Page.bringToFront',{},panel);
+ await cmd('Emulation.setFocusEmulationEnabled',{enabled:true},panel);
+ await api(`document.activeElement?.blur();document.querySelector('.preset-button').scrollIntoView({block:'center'})`);
+ await delay(300);
  const center=await api(`(()=>{const r=document.querySelector('.preset-button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+ assert.equal(await api(`document.elementFromPoint(${center.x},${center.y})?.matches('.preset-button')`),true);
  await cmd('Input.dispatchMouseEvent',{type:'mouseMoved',...center},panel);
  await cmd('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...center},panel);await delay(120);
  assert.notEqual(await api(`getComputedStyle(document.querySelector('.preset-button')).transform`),'none');
@@ -100,10 +104,15 @@ try{
  // Verify actual cursor tracking on both a plain and a primary button, in both themes.
  const glow=selector=>api(`(()=>{const b=document.querySelector(${JSON.stringify(selector)});const p=getComputedStyle(b,'::before');return {active:b.hasAttribute('data-pointer-glow'),x:parseFloat(b.style.getPropertyValue('--pointer-x')),opacity:Number(p.opacity),gradient:p.backgroundImage};})()`);
  const moveWithin=async(selector,fraction)=>{
-  await api(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);await delay(80);
-  const pos=await api(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width*${fraction},y:r.y+r.height/2};})()`);
-  await cmd('Input.dispatchMouseEvent',{type:'mouseMoved',...pos},panel);
-  await waitFor(async()=>{const g=await glow(selector);return g.active&&Math.abs(g.x-fraction*100)<2&&g.opacity>.99;},'pointer glow tracked').catch(async e=>{throw Error(e.message+' '+JSON.stringify({selector,pos,glow:await glow(selector),hit:await api(`document.elementFromPoint(${pos.x},${pos.y})?.outerHTML`)}));});
+  await cmd('Page.bringToFront',{},panel);
+  let pos;
+  // Capture/theme changes can settle scrolling after the first frame. Move at current screen coordinates.
+  await waitFor(async()=>{
+   pos=await api(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});let r=e.getBoundingClientRect();if(r.top<0||r.bottom>innerHeight){e.scrollIntoView({block:'center'});return null;}return {x:r.x+r.width*${fraction},y:r.y+r.height/2};})()`);
+   if(!pos)return false;
+   await cmd('Input.dispatchMouseEvent',{type:'mouseMoved',...pos},panel);
+   const g=await glow(selector);return g.active&&Math.abs(g.x-fraction*100)<2&&g.opacity>.99;
+  },'pointer glow tracked');
   return pos;
  };
  for(const theme of ['light','dark']) {

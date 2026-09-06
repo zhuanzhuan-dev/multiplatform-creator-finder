@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AdvancedRulesPanel, CloudPanel, RecentDecisions, RunOverview, SettingsPanel, StatsOverview, StatusBadge } from "./components";
+import { AdvancedRulesPanel, CloudPanel, RunOverview, SettingsPanel, StatsOverview } from "./components";
 import { rulesDraft, settingsDraft } from "./types";
 import { PreferencesMenu } from "./PreferencesMenu";
 import { useButtonGlow } from "../shared/useButtonGlow";
@@ -42,13 +42,20 @@ export default function App() {
     return <main><div className="loading-state" role="status">正在读取运行状态…</div><p className={`message ${extension.notice.error ? "error" : ""}`}>{extension.notice.text}</p></main>;
   }
 
+  const cloudPanel = <CloudPanel snapshot={snapshot} checking={extension.bridgeChecking || extension.connecting} onCheck={() => void extension.checkCloud()} onConnect={() => void extension.connectCloud()} onDisconnect={() => void extension.disconnectCloud()} />;
+  const connected = snapshot.cloud?.connected && snapshot.cloud?.pairing?.status !== "pending";
   return (
     <main>
       <header className="app-header">
         <h1 className="visually-hidden">多平台自动找号助手</h1>
         <span className="version-label" aria-label={`版本 ${visibleVersion}`}>V{visibleVersion}</span>
-        <div className="header-actions"><button onClick={() => void extension.openWorkbench()}>打开工作台</button><StatusBadge status={state.status} /><PreferencesMenu /></div>
+        <div className="header-actions"><button onClick={() => void extension.openWorkbench()}>打开工作台</button><PreferencesMenu>
+          {cloudPanel}
+          <details className="debug-settings"><summary>开发调试</summary><label className="check"><input type="checkbox" checked={draft.dryRun} disabled={active || Boolean(extension.busyAction)} onChange={(event) => { const next = { ...draft, dryRun: event.target.checked }; setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} />本地测试（不连接、不上传）</label></details>
+        </PreferencesMenu></div>
       </header>
+      {!connected ? cloudPanel : <div className="connection-summary">研究台已连接 · 结果自动同步</div>}
+      {draft.dryRun ? <p className="test-mode-note">本地测试模式 · 结果保存在本机，正式使用请在设置中关闭</p> : null}
       <RunOverview
         state={state}
         cloud={snapshot.cloud}
@@ -56,13 +63,13 @@ export default function App() {
         schedule={snapshot.schedule}
         now={now}
         busyAction={extension.busyAction}
+        startDisabled={!draft.dryRun && (!connected || extension.bridgeChecking)}
         onStart={() => void extension.run("start", draft)}
+        onResume={() => void extension.run("resume", draft)}
         onPause={() => void extension.run("pause", draft)}
         onStop={() => void extension.run("stop", draft)}
       />
-      <RecentDecisions state={state} now={now} />
-      <StatsOverview state={state} now={now} />
-      <CloudPanel snapshot={snapshot} checking={extension.bridgeChecking} onCheck={() => void extension.checkCloud()} onConnect={() => void extension.connectCloud()} onDisconnect={() => void extension.disconnectCloud()} />
+      <StatsOverview state={state} now={now} daily={snapshot.daily} />
       <SettingsPanel draft={draft} disabled={active || Boolean(extension.busyAction)} saveStatus={extension.settingsNotice} onChange={(next) => { setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} onSave={() => void extension.saveSettings(draft).catch(() => undefined)} />
       <AdvancedRulesPanel draft={ruleDraft} disabled={active || Boolean(extension.busyAction)} onChange={setRuleDraft} onSave={() => void extension.saveRules(ruleDraft).catch(() => undefined)} />
       <details className="notice-disclosure">
