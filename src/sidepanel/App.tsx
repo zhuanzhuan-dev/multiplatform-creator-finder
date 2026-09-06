@@ -1,3 +1,4 @@
+import { usePanelPresence } from "./use-panel-presence";
 import { useEffect, useRef, useState } from "react";
 import { AdvancedRulesPanel, CloudPanel, RunOverview, SettingsPanel, StatsOverview } from "./components";
 import { rulesDraft, settingsDraft } from "./types";
@@ -10,6 +11,7 @@ const visibleVersion = manifest.version_name || manifest.version;
 
 export default function App() {
   useButtonGlow();
+  usePanelPresence();
   const extension = useExtensionState();
   const [now, setNow] = useState(Date.now());
   const [draft, setDraft] = useState(settingsDraft());
@@ -74,7 +76,7 @@ export default function App() {
       <AdvancedRulesPanel draft={ruleDraft} disabled={active || Boolean(extension.busyAction)} onChange={setRuleDraft} onSave={() => void extension.saveRules(ruleDraft).catch(() => undefined)} />
       <details className="notice-disclosure">
         <summary>运行说明</summary>
-        <p>点击“开始本轮”会使用当前抖音推荐页，或打开同窗口中的推荐页。切换标签页或窗口后任务继续运行，侧栏可随时暂停或停止。页面停滞时尝试恢复，持续异常或关闭任务页时暂停。每轮只有绑定页面能采集和上传。</p>
+        <p>点击“开始本轮”会使用当前抖音推荐页，或打开同窗口中的推荐页。切换标签页、窗口或关闭侧栏后任务继续运行。抖音页面的悬浮入口或工具栏插件图标可重新打开面板，侧栏可随时暂停或停止。页面停滞时尝试恢复，持续异常或关闭任务页时暂停。每轮只有绑定页面能采集和上传。</p>
       </details>
       <p className={`message ${extension.notice.error ? "error" : ""}`} aria-live="polite">{extension.notice.text}</p>
     </main>

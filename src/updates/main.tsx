@@ -18,19 +18,16 @@ function UpdatePage() {
           <h1>V{visibleVersion} 已就绪</h1>
         </div>
       </header>
-      <p className="lead">暂停后继续本轮，保留已有发现；上传在后台独立完成，找号节奏更连贯。</p>
+      <p className="lead">收起面板，任务继续。通过页面悬浮入口或工具栏状态图标，随时回到找号助手。</p>
       <section>
         <h2>本次更新</h2>
         <ul>
-          <li><strong>暂停与继续</strong><span>继续原任务时保留计数、记录和目标，暂停时间不计入运行时长。停止或达到目标后，可开始新一轮。</span></li>
-          <li><strong>独立后台同步</strong><span>刷推荐流不等待上传响应；暂停找号后，连接有效时已有队列继续同步。</span></li>
-          <li><strong>结果更集中</strong><span>本轮结果下方显示最近 5 条记录，新增今日已刷，运行状态移入运行卡片。</span></li>
-          <li><strong>连接与规则更清楚</strong><span>登录连接入口前置，设置中管理连接和主题；规则分为想找的内容与排除条件。</span></li>
-          <li><strong>内容分类与计数</strong><span>分别记录直播、图文、广告及类型未确认的跳过原因，修正旧记录补传影响本轮同步计数的问题。</span></li>
-          <li><strong>浅色材质</strong><span>柔白卡片、浅灰绿背景与按钮跟随高光，支持浅色、深色和跟随系统。</span></li>
+          <li><strong>悬浮任务入口</strong><span>抖音页面右侧显示雷达按钮，点击恢复侧栏；展开侧栏时自动隐藏。</span></li>
+          <li><strong>状态随时可见</strong><span>区分运行、暂停和结束状态，工具栏图标同步显示任务角标。</span></li>
+          <li><strong>位置与外观</strong><span>沿右边缘拖动并记住位置，支持键盘上下调整、浅色与深色主题，以及减少动态效果。</span></li>
         </ul>
       </section>
-      <aside>重新加载扩展后打开侧栏。继续本轮需要原抖音任务页保持可用。</aside>
+      <aside>关闭侧栏后任务继续运行。关闭推荐流任务页会暂停找号，退出 Chrome 后任务无法继续执行。</aside>
       <footer>
         {previousVersion ? <span>从 V{previousVersion} 更新</span> : <span>当前版本 V{visibleVersion}</span>}
         <button onClick={() => window.close()}>知道了</button>

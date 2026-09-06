@@ -1,3 +1,4 @@
+import { launcherState, toolbarState } from "./lib/launcher-state.js";
 import { contentSkipDecision } from "./lib/content-type.js";
 import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
 import {
@@ -31,6 +32,7 @@ const MAX_OUTBOX = 1_000;
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const SIDE_PANEL_PATH = "sidepanel/index.html";
 const attachedDebuggerTabs = new Set();
+const panelPorts = new Map();
 const cloudClient = createCloudClient();
 const MAX_UPLOAD_ATTEMPTS = 8;
 
@@ -126,6 +128,7 @@ async function initialize() {
       [STORAGE_KEYS.profileQueue]: [],
       [STORAGE_KEYS.outbox]: outbox
     });
+    await updateTaskIndicators();
     await syncScheduleAlarm();
     await syncRunStopAlarm();
     await scheduleUpload();
@@ -134,8 +137,38 @@ async function initialize() {
   return initialized;
 }
 
+async function updateTaskIndicators() {
+  const badge = toolbarState(state);
+  await Promise.all([
+    chrome.action.setBadgeText({ text: badge.text }),
+    chrome.action.setBadgeBackgroundColor({ color: badge.color }),
+    chrome.action.setTitle({ title: badge.title })
+  ]);
+}
+
+async function notifyLauncherWindow(windowId) {
+  const tabs = await chrome.tabs.query({ windowId, url: "https://www.douyin.com/*" });
+  for (const tab of tabs) chrome.tabs.sendMessage(tab.id, {
+    type: "DRA_LAUNCHER_CHANGED", launcher: launcherState(state, Boolean(panelPorts.get(windowId)?.size))
+  }).catch(() => undefined);
+}
+
+chrome.runtime.onConnect.addListener(port => {
+  if (!port.name.startsWith("dra-panel:") || port.sender?.url !== chrome.runtime.getURL(SIDE_PANEL_PATH)) return;
+  const windowId = Number(port.name.slice("dra-panel:".length));
+  if (!Number.isInteger(windowId)) return;
+  const ports = panelPorts.get(windowId) || new Set();
+  ports.add(port); panelPorts.set(windowId, ports);
+  initialize().then(() => notifyLauncherWindow(windowId)).catch(() => undefined);
+  port.onDisconnect.addListener(() => {
+    ports.delete(port); if (!ports.size) panelPorts.delete(windowId);
+    notifyLauncherWindow(windowId).catch(() => undefined);
+  });
+});
+
 async function persistState(notificationTabId = state.feedTabId) {
   await chrome.storage.local.set({ [STORAGE_KEYS.state]: state, [STORAGE_KEYS.dailyStats]: dailyStats });
+  void updateTaskIndicators().catch(() => undefined);
   chrome.runtime.sendMessage({ type: "DRA_STATUS_CHANGED", tabId: notificationTabId, state }).catch(() => undefined);
 }
 
@@ -1451,6 +1484,12 @@ async function stopAtReachedTarget(result) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Call immediately in the user gesture, before storage/auth initialization.
+  if (message?.type === "DRA_OPEN_PANEL") {
+    if (!sender.tab || !sender.url?.startsWith("https://www.douyin.com/")) { sendResponse({ ok:false }); return false; }
+    chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(() => sendResponse({ok:true})).catch(error => sendResponse({ok:false,error:error.message}));
+    return true;
+  }
   (async () => {
     await initialize();
     switch (message?.type) {
@@ -1490,6 +1529,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await persistState();
         return { ok: true };
       }
+      case "DRA_GET_LAUNCHER":
+        return { ok:true, launcher: launcherState(state, Boolean(panelPorts.get(sender.tab?.windowId)?.size)) };
       case "DRA_GET_STATUS":
         return {
           ok: true,
