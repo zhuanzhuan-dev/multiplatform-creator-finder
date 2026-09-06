@@ -192,3 +192,6 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--mint); }
   .run-time strong { font-size: 17px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.header-actions button { padding: 5px 8px; font-size: 12px; white-space: nowrap; }

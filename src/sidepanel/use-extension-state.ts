@@ -4,7 +4,7 @@ import type { CloudState, RuleSettings, SettingsDraft, Snapshot } from "./types"
 
 interface SnapshotResponse extends Snapshot { ok: boolean; }
 interface CloudResponse { ok: boolean; cloud?: CloudState; health?: { destination?: { name?: string } }; }
-interface SaveResponse { ok: boolean; settings: Snapshot["settings"]; rules: unknown; problems?: string[]; }
+interface SaveResponse { ok: boolean; settings: Snapshot["settings"]; rules: unknown; settingsDraft?: Snapshot["settingsDraft"]; problems?: string[]; }
 
 async function getPanelTab() {
   const currentWindow = await chrome.windows.getCurrent();
@@ -22,14 +22,15 @@ export function useExtensionState() {
   const [bridgeChecking, setBridgeChecking] = useState(false);
   const checkedConnection = useRef(false);
   const bridgeCheckInFlight = useRef(false);
-  const panelTabId = useRef<number | null>(null);
+  const settingsRequest = useRef(0);
+  const [settingsNotice, setSettingsNotice] = useState("设置已保存");
 
   const show = useCallback((text: string, error = false) => setNotice({ text, error }), []);
   const refresh = useCallback(async () => {
     const tab = await getPanelTab();
-    panelTabId.current = tab.id;
-    const response = await sendRuntime<SnapshotResponse>({ type: "DRA_GET_STATUS", tabId: tab.id, url: tab.url });
+    const response = await sendRuntime<SnapshotResponse>({ type: "DRA_GET_STATUS", tabId: tab.id, url: tab.url, global: true });
     setSnapshot(response);
+    if (!settingsRequest.current && response.settingsDraft) setSettingsNotice("已恢复未完成的草稿，请修正后使用");
     return response;
   }, []);
 
@@ -53,8 +54,10 @@ export function useExtensionState() {
     }
   }, [show]);
 
-  const saveSettings = useCallback(async (draft: SettingsDraft) => {
+  const saveSettings = useCallback(async (draft: SettingsDraft, autoSave = false) => {
     if (!snapshot) throw new Error("运行状态尚未加载");
+    const requestId = ++settingsRequest.current;
+    setSettingsNotice("正在保存…");
     const current = snapshot.settings || {};
     const settings = {
       ...current,
@@ -88,11 +91,23 @@ export function useExtensionState() {
       },
       cloud: { ...(current.cloud || {}), enabled: draft.bridgeEnabled }
     };
-    const response = await sendRuntime<SaveResponse>({ type: "DRA_SAVE_CONFIG", settings, rules: snapshot.rules });
-    setSnapshot((value) => value ? { ...value, settings: response.settings, rules: response.rules } : value);
-    const problemText = response.problems?.join("；") || "";
-    show(problemText || "设置已保存", Boolean(problemText));
-    return response;
+    try {
+      const response = await sendRuntime<SaveResponse>({ type: "DRA_SAVE_CONFIG", settings, saveDraft: autoSave });
+      if (requestId === settingsRequest.current) {
+        setSnapshot((value) => value ? { ...value, settings: response.settings, settingsDraft: response.settingsDraft, rules: response.rules } : value);
+        const problemText = response.problems?.join("；") || "";
+        setSettingsNotice(problemText ? `草稿已保存，待修正：${problemText}` : "设置已自动保存");
+        if (!autoSave) show(problemText || "设置已保存", Boolean(problemText));
+      }
+      return response;
+    } catch (error) {
+      if (requestId === settingsRequest.current) {
+        const text = error instanceof Error ? error.message : String(error);
+        setSettingsNotice(`保存失败：${text}`);
+        show(text, true);
+      }
+      throw error;
+    }
   }, [show, snapshot]);
 
   const saveRules = useCallback(async (nextRules: RuleSettings) => {
@@ -100,7 +115,6 @@ export function useExtensionState() {
     try {
       const response = await sendRuntime<SaveResponse>({
         type: "DRA_SAVE_CONFIG",
-        settings: snapshot.settings || {},
         rules: nextRules
       });
       setSnapshot((value) => value ? { ...value, settings: response.settings, rules: response.rules } : value);
@@ -120,14 +134,11 @@ export function useExtensionState() {
         show("正在连接研究台并绑定当前标签页…");
         await saveSettings(draft);
         const tab = await getPanelTab();
-        panelTabId.current = tab.id;
         await sendRuntime({ type: "DRA_START", tabId: tab.id });
       } else if (action === "pause") {
-        const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_PAUSE", tabId: tab.id });
+        await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId });
       } else {
-        const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_STOP", tabId: tab.id });
+        await sendRuntime({ type: "DRA_STOP", tabId: snapshot?.state?.feedTabId });
       }
       await refresh();
     } catch (error) {
@@ -136,7 +147,7 @@ export function useExtensionState() {
     } finally {
       setBusyAction("");
     }
-  }, [refresh, saveSettings, show]);
+  }, [refresh, saveSettings, show, snapshot?.state?.feedTabId]);
 
   const connectCloud = useCallback(async () => {
     try {
@@ -172,7 +183,7 @@ export function useExtensionState() {
   useEffect(() => {
     const listener = (event: unknown) => {
       const message = event as { type?: string; tabId?: number | null };
-      if (message.type === "DRA_STATUS_CHANGED" && message.tabId === panelTabId.current) void refresh();
+      if (message.type === "DRA_STATUS_CHANGED") void refresh().catch(() => undefined);
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
@@ -202,8 +213,15 @@ export function useExtensionState() {
     return () => window.clearInterval(timer);
   }, [refresh, show, snapshot?.cloud?.pairing?.status, updateCloud]);
 
+  const openWorkbench = async () => {
+    try { await sendRuntime({ type: "DRA_OPEN_WORKBENCH" }); }
+    catch (error) { show(error instanceof Error ? error.message : String(error), true); }
+  };
+
   return {
     snapshot,
+    settingsNotice,
+    openWorkbench,
     notice,
     busyAction,
     bridgeChecking,

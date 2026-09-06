@@ -35,6 +35,8 @@ let initialized = null;
 let state = structuredClone(INITIAL_STATE);
 let settings = mergeSettings();
 let rules = mergeRules();
+let settingsDraft = null;
+let configQueue = Promise.resolve();
 let seenVideos = [];
 let creatorIndex = {};
 let outbox = [];
@@ -69,6 +71,7 @@ async function initialize() {
     const savedRules = saved[STORAGE_KEYS.rules] || {};
     const savedRulesVersion = Number(savedRules.version || 0);
     settings = mergeSettings(saved[STORAGE_KEYS.settings] || DEFAULT_SETTINGS);
+    settingsDraft = saved[STORAGE_KEYS.settingsDraft] || null;
     rules = mergeRules(savedRules);
     const savedState = saved[STORAGE_KEYS.state] || {};
     state = {
@@ -463,22 +466,16 @@ async function ensureContentRuntime(tab) {
   return reloaded;
 }
 
-async function configureSidePanelForTab(tabId, url) {
-  if (!Number.isInteger(tabId)) return;
-  const enabled = isRecommendationFeedUrl(url);
-  const options = enabled
-    ? { tabId, path: SIDE_PANEL_PATH, enabled: true }
-    : { tabId, enabled: false };
-  await chrome.sidePanel.setOptions(options);
-}
-
 async function configureOpenTabSidePanels() {
-  // 禁用 manifest 中的默认全局面板，仅为支持的具体标签页创建独立实例。
-  await chrome.sidePanel.setOptions({ enabled: false }).catch(() => undefined);
+  await chrome.sidePanel.setOptions({ path: SIDE_PANEL_PATH, enabled: true });
+  // Upgrade tabs carrying the previous per-tab disabled override.
   const tabs = await chrome.tabs.query({});
-  await Promise.all(tabs.map((tab) => (
-    configureSidePanelForTab(tab.id, tab.url || tab.pendingUrl || "").catch(() => undefined)
-  )));
+  await Promise.all(tabs.map(async tab => {
+    const previous = await chrome.sidePanel.getOptions({ tabId: tab.id });
+    if (Number.isInteger(previous.tabId)) {
+      await chrome.sidePanel.setOptions({ tabId: tab.id, path: SIDE_PANEL_PATH, enabled: true });
+    }
+  }));
 }
 
 async function requireFeedTab(tabId, { requireActive = true, requireFocused = true } = {}) {
@@ -525,7 +522,6 @@ async function findOrCreateFeedTab({ windowId, reuseExisting = true, focusTab = 
     tab = await chrome.tabs.update(tab.id, { active: true });
   }
   if (!Number.isInteger(tab?.id)) throw new Error("无法创建抖音推荐页");
-  await configureSidePanelForTab(tab.id, tab.url || tab.pendingUrl || launchUrl("douyin", "recommend"));
   return { tab, createdByExtension };
 }
 
@@ -544,7 +540,6 @@ async function scheduledFeedTab() {
   }
   if (!Number.isInteger(tab?.id)) throw new Error("无法创建定时任务推荐页");
   await chrome.tabs.update(tab.id, { autoDiscardable: false });
-  await configureSidePanelForTab(tab.id, tab.url || tab.pendingUrl || launchUrl("douyin", "recommend"));
   return { tab, createdByExtension: true };
 }
 
@@ -1000,6 +995,30 @@ async function handlePanelSkipped(observation, reason) {
   return { continue: true, action: "advance", decision: state.lastDecision, observationRecordId };
 }
 
+async function saveConfiguration(message) {
+  if (isActiveRunStatus()) throw new Error("请先暂停任务再修改配置");
+  const nextSettings = mergeSettings(message.settings || settings);
+  const nextRules = mergeRules(message.rules || rules);
+  const problems = [...validateSettings(nextSettings), ...validateRules(nextRules), ...validateSchedule(nextSettings.schedule)];
+  if (problems.length) {
+    if (!message.saveDraft) throw new Error(problems.join("；"));
+    await chrome.storage.local.set({ [STORAGE_KEYS.settingsDraft]: nextSettings });
+    settingsDraft = nextSettings;
+    return { ok: true, settings, settingsDraft, rules, problems };
+  }
+  const scheduleChanged = JSON.stringify(settings.schedule) !== JSON.stringify(nextSettings.schedule);
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.settings]: nextSettings,
+    [STORAGE_KEYS.rules]: nextRules,
+    [STORAGE_KEYS.settingsDraft]: message.settings ? null : settingsDraft
+  });
+  settings = nextSettings;
+  rules = nextRules;
+  if (message.settings) settingsDraft = null;
+  if (scheduleChanged) await syncScheduleAlarm();
+  return { ok: true, settings, settingsDraft, rules, problems: [] };
+}
+
 async function startRun({ trigger = "manual", scheduledFor = null, tabId = null } = {}) {
   await initialize();
   const problems = [...validateSettings(settings), ...validateRules(rules), ...validateSchedule(settings.schedule)];
@@ -1008,11 +1027,14 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   if (trigger === "schedule") {
     requested = await scheduledFeedTab();
   } else {
-    const tab = await requireFeedTab(tabId);
-    requested = {
-      tab,
-      createdByExtension: state.createdByExtension === true && state.feedTabId === tab.id
-    };
+    const current = await chrome.tabs.get(tabId);
+    if (isRecommendationFeedUrl(current.url || current.pendingUrl || "")) {
+      const tab = await requireFeedTab(tabId);
+      requested = { tab, createdByExtension: state.createdByExtension === true && state.feedTabId === tab.id };
+    } else {
+      requested = await findOrCreateFeedTab({ windowId: current.windowId, reuseExisting: true, focusTab: true });
+      requested.createdByExtension ||= state.createdByExtension === true && state.feedTabId === requested.tab.id;
+    }
   }
   const requestedTab = requested.tab;
   if (isActiveRunStatus() && state.feedTabId === requestedTab.id) return state;
@@ -1256,55 +1278,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url || tab.pendingUrl || "";
-  configureSidePanelForTab(tabId, url).catch(() => undefined);
   if (tabId === state.feedTabId && state.status === "running" && changeInfo.status === "complete") {
     watchdog().catch((error) => setPaused("刷新后恢复失败", error.message));
   }
   if (tabId === state.feedTabId && isActiveRunStatus() && !isRecommendationFeedUrl(url)) {
     setPaused("当前标签页已离开抖音推荐页").catch(() => undefined);
   }
-});
-
-chrome.action.onClicked.addListener((clickedTab) => {
-  // 支持的推荐页由 Chrome 根据 openPanelOnActionClick 直接打开，避免异步操作丢失用户手势。
-  if (isRecommendationFeedUrl(clickedTab.url || clickedTab.pendingUrl || "")) return;
-  const clickedTabId = clickedTab.id;
-  let notificationTabId = clickedTabId;
-  (async () => {
-    if (Number.isInteger(clickedTabId)) {
-      await Promise.all([
-        chrome.action.setBadgeText({ tabId: clickedTabId, text: "" }),
-        chrome.action.setTitle({ tabId: clickedTabId, title: "打开多平台自动找号助手" })
-      ]);
-    }
-    const selected = await findOrCreateFeedTab({ windowId: clickedTab.windowId, reuseExisting: true, focusTab: true });
-    const tab = selected.tab;
-    notificationTabId = tab.id;
-    await chrome.sidePanel.open({ tabId: tab.id });
-    initialize().then(async () => {
-      if (isActiveRunStatus()) return;
-      const previousManagedTabId = state.createdByExtension && state.feedTabId !== tab.id
-        ? state.feedTabId
-        : null;
-      const alreadyOwned = state.createdByExtension === true && state.feedTabId === tab.id;
-      state.feedTabId = tab.id;
-      state.feedWindowId = tab.windowId;
-      state.createdByExtension = selected.createdByExtension || alreadyOwned;
-      if (Number.isInteger(previousManagedTabId)) {
-        await chrome.tabs.remove(previousManagedTabId).catch(() => undefined);
-      }
-      await persistState();
-    }).catch((error) => console.error("保存推荐页所有权失败", error));
-  })().catch(async (error) => {
-    const message = error?.message || String(error);
-    console.error("打开抖音推荐页侧栏失败", error);
-    if (!Number.isInteger(notificationTabId)) return;
-    await Promise.all([
-      chrome.action.setBadgeBackgroundColor({ tabId: notificationTabId, color: "#d93025" }),
-      chrome.action.setBadgeText({ tabId: notificationTabId, text: "!" }),
-      chrome.action.setTitle({ tabId: notificationTabId, title: `打开失败：${message}` })
-    ]).catch(() => undefined);
-  });
 });
 
 chrome.debugger.onDetach.addListener((source, reason) => {
@@ -1388,8 +1367,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_GET_STATUS":
         return {
           ok: true,
-          state: await stateSnapshotForTab(message.tabId),
+          state: await stateSnapshotForTab(message.global ? state.feedTabId : message.tabId),
           settings,
+          settingsDraft,
           rules,
           teamDestination: TEAM_DESTINATION,
           cloud: cloudStatusSnapshot(),
@@ -1413,6 +1393,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, cloud: cloudStatusSnapshot() };
       case "DRA_DISCONNECT_CLOUD":
         return { ok: true, cloud: await disconnectCloud() };
+      case "DRA_OPEN_WORKBENCH":
+        await chrome.tabs.create({ url: CLOUD_DESTINATION.workbenchUrl, active: true });
+        return { ok: true };
       case "DRA_START":
         return { ok: true, state: await startRun({ tabId: message.tabId }) };
       case "DRA_PAUSE":
@@ -1424,16 +1407,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");
         return { ok: true, state: await stopRun() };
       case "DRA_SAVE_CONFIG": {
-        if (isActiveRunStatus()) throw new Error("请先暂停任务再修改配置");
-        const nextSettings = mergeSettings(message.settings || settings);
-        const nextRules = mergeRules(message.rules || rules);
-        const problems = [...validateSettings(nextSettings), ...validateRules(nextRules), ...validateSchedule(nextSettings.schedule)];
-        if (problems.length) throw new Error(problems.join("；"));
-        settings = nextSettings;
-        rules = nextRules;
-        await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings, [STORAGE_KEYS.rules]: rules });
-        await syncScheduleAlarm();
-        return { ok: true, settings, rules, problems: [] };
+        const save = configQueue.then(() => saveConfiguration(message));
+        configQueue = save.catch(() => undefined);
+        return save;
       }
       case "DRA_OBSERVATION": {
         requireBoundContentTab(sender, message);

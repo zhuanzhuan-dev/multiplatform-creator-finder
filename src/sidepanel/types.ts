@@ -21,6 +21,7 @@ export interface Decision {
 
 export interface RunState {
   status?: "idle" | "starting" | "running" | "paused" | "stopped";
+  feedTabId?: number | null;
   startedAt?: string | null;
   endedAt?: string | null;
   lastTickAt?: string | null;
@@ -98,6 +99,7 @@ export interface CloudState {
 export interface Snapshot {
   state?: RunState;
   settings?: Settings;
+  settingsDraft?: Settings | null;
   rules?: unknown;
   cloud?: CloudState;
   schedule?: ScheduleSettings & { nextRunAt?: string; lastRunAt?: string; lastResult?: string };
@@ -130,10 +132,10 @@ export interface SettingsDraft {
 
 export function settingsDraft(settings: Settings = {}): SettingsDraft {
   return {
-    dwellMode: settings.dwell?.mode ?? "fixed",
+    dwellMode: settings.dwell?.mode ?? "range",
     fixedDwellSeconds: settings.dwell?.fixedSeconds ?? 30,
     dwellMinSeconds: settings.dwell?.minSeconds ?? 10,
-    dwellTypicalSeconds: settings.dwell?.typicalSeconds ?? 15,
+    dwellTypicalSeconds: settings.dwell?.typicalSeconds ?? 20,
     dwellMaxSeconds: settings.dwell?.maxSeconds ?? 30,
     targetMode: settings.target?.mode ?? "both",
     targetDurationMinutes: settings.target?.durationMinutes ?? 60,

@@ -22,8 +22,8 @@ const referencedFiles = [
   "updates/index.html"
 ].filter(Boolean);
 
-if (manifest.side_panel?.default_path) {
-  throw new Error("sidepanel 仍配置为全局 default_path，必须改为按 tab 动态启用");
+if (manifest.side_panel?.default_path !== "sidepanel/index.html") {
+  throw new Error("sidepanel 缺少全局入口，无法在任意标签页首次打开");
 }
 if (manifest.options_page) {
   throw new Error("高级设置仍配置为独立 options 页面，必须保留在侧边栏内");
@@ -32,7 +32,7 @@ if (backgroundSource.includes("chrome.windows.create")) {
   throw new Error("background 仍会创建独立工作窗口");
 }
 if (!backgroundSource.includes("chrome.sidePanel.setOptions") || !backgroundSource.includes("current-tab")) {
-  throw new Error("background 缺少按 tab 启用侧边栏或当前 tab 绑定逻辑");
+  throw new Error("background 缺少侧边栏启用或任务 tab 绑定逻辑");
 }
 if (!/openPanelOnActionClick\s*:\s*(?:true|!0)/.test(backgroundSource)) {
   throw new Error("background 未启用工具栏图标直接打开侧边栏");

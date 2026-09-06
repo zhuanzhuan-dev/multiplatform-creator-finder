@@ -195,9 +195,10 @@ interface SettingsPanelProps {
   disabled: boolean;
   onChange(next: SettingsDraft): void;
   onSave(): void;
+  saveStatus: string;
 }
 
-export function SettingsPanel({ draft, disabled, onChange, onSave }: SettingsPanelProps) {
+export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }: SettingsPanelProps) {
   const number = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, [key]: Number(event.target.value) });
   };
@@ -241,11 +242,12 @@ export function SettingsPanel({ draft, disabled, onChange, onSave }: SettingsPan
           ) : (
             <div className="form-grid three-fields">
               <label>最短（秒）<input type="number" min="5" max="300" value={draft.dwellMinSeconds} disabled={disabled} onChange={number("dwellMinSeconds")} /></label>
-              <label>常见（秒）<input type="number" min="5" max="300" value={draft.dwellTypicalSeconds} disabled={disabled} onChange={number("dwellTypicalSeconds")} /></label>
+              <label>中心（秒）<input type="number" min="5" max="300" value={draft.dwellTypicalSeconds} disabled={disabled} onChange={number("dwellTypicalSeconds")} /></label>
               <label>最长（秒）<input type="number" min="5" max="300" value={draft.dwellMaxSeconds} disabled={disabled} onChange={number("dwellMaxSeconds")} /></label>
             </div>
           )}
-          <p className="field-note">随机区间采用“最短 / 常见 / 最长”分布。例如 10 / 15 / 30 秒时，大部分停留会落在 10–20 秒。</p>
+          <button className="preset-button" disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "range", dwellMinSeconds: 10, dwellTypicalSeconds: 20, dwellMaxSeconds: 30 })}>应用随机预设</button>
+          <p className="field-note">随机区间采用截断正态分布，在上下限之间连续取值，多数接近中心。默认 10–30 秒、中心 20 秒；随机节奏无法保证避免平台风控。</p>
         </section>
 
         <section className="setting-group" aria-labelledby="targetSettingTitle">
@@ -287,6 +289,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave }: SettingsPan
         </div>
         <div className="settings-actions">
           <button className="primary compact" disabled={disabled} onClick={onSave}>保存设置</button>
+          <p className="field-note" role="status">{saveStatus}</p>
         </div>
       </div>
     </details>
