@@ -39,7 +39,7 @@ for(let i=0;i<50&&!extensionId;i++){
 assert.ok(extensionId,'extension worker loaded');
 
 const report={profile,version:JSON.parse(await readFile(resolve(root,'dist/manifest.json'),'utf8')).version,startedAt:new Date().toISOString(),scenarios:[]};
-const output=resolve(root,'test-results/panel-settings.json');
+const output=resolve(root,process.env.RESUME_PROFILE?'test-results/panel-settings-restart.json':'test-results/panel-settings.json');
 await mkdir(resolve(root,'test-results'),{recursive:true});
 let panel;
 const api=expression=>evaluate(panel,expression);

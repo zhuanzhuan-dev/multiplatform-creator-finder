@@ -77,8 +77,10 @@ if(process.env.LIVE_RUN==='1'){
  for(let i=0;i<150;i++){saved=await api(`chrome.storage.local.get('draState').then(v=>v.draState)`);if(saved.status==='running'||saved.status==='paused')break;await delay(300);}
  assert.equal(saved.status,'running',JSON.stringify(saved));feedTabId=saved.feedTabId;feedTab=await api(`chrome.tabs.get(${feedTabId})`);
 }else{
- const started=await api(`chrome.tabs.update(${feedTabId},{active:true}).then(t=>chrome.windows.update(t.windowId,{focused:true})).then(()=>chrome.runtime.sendMessage({type:'DRA_START',tabId:${feedTabId}}))`);
+ const startTabId=process.env.START_FROM_OTHER==='1' ? (await api(`chrome.tabs.create({url:'about:blank',active:true})`)).id : feedTabId;
+ const started=await api(`chrome.tabs.update(${startTabId},{active:true}).then(t=>chrome.windows.update(t.windowId,{focused:true})).then(()=>chrome.runtime.sendMessage({type:'DRA_START',tabId:${startTabId}}))`);
  assert.equal(started.ok,true,JSON.stringify(started));
+ assert.equal(started.state.feedTabId,feedTabId);
 }
 const foreground=await api(`chrome.tabs.create({url:'about:blank',active:${process.env.FOREGROUND_BASELINE!=='1'}})`);
 const state=()=>request({type:'DRA_GET_STATUS',tabId:feedTabId}).then(r=>r.state);
