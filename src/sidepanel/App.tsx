@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { AdvancedRulesPanel, CloudPanel, RecentDecisions, RunOverview, SettingsPanel, StatsOverview, StatusBadge, UtilityList } from "./components";
+import { AdvancedRulesPanel, CloudPanel, RecentDecisions, RunOverview, SettingsPanel, StatsOverview, StatusBadge } from "./components";
 import { rulesDraft, settingsDraft } from "./types";
+import { PreferencesMenu } from "./PreferencesMenu";
+import { useButtonGlow } from "../shared/useButtonGlow";
 import { useExtensionState } from "./use-extension-state";
 
 const manifest = chrome.runtime.getManifest();
 const visibleVersion = manifest.version_name || manifest.version;
 
 export default function App() {
+  useButtonGlow();
   const extension = useExtensionState();
   const [now, setNow] = useState(Date.now());
   const [draft, setDraft] = useState(settingsDraft());
@@ -42,13 +45,15 @@ export default function App() {
   return (
     <main>
       <header className="app-header">
-        <div><h1 className="visually-hidden">多平台自动找号助手</h1><p className="eyebrow">达人与视频发现 · V{visibleVersion}</p></div>
-        <div className="header-actions"><button onClick={() => void extension.openWorkbench()}>打开工作台</button><StatusBadge status={state.status} /></div>
+        <h1 className="visually-hidden">多平台自动找号助手</h1>
+        <span className="version-label" aria-label={`版本 ${visibleVersion}`}>V{visibleVersion}</span>
+        <div className="header-actions"><button onClick={() => void extension.openWorkbench()}>打开工作台</button><StatusBadge status={state.status} /><PreferencesMenu /></div>
       </header>
       <RunOverview
         state={state}
         cloud={snapshot.cloud}
         outboxCount={snapshot.outboxCount || 0}
+        schedule={snapshot.schedule}
         now={now}
         busyAction={extension.busyAction}
         onStart={() => void extension.run("start", draft)}
@@ -58,7 +63,6 @@ export default function App() {
       <RecentDecisions state={state} now={now} />
       <StatsOverview state={state} now={now} />
       <CloudPanel snapshot={snapshot} checking={extension.bridgeChecking} onCheck={() => void extension.checkCloud()} onConnect={() => void extension.connectCloud()} onDisconnect={() => void extension.disconnectCloud()} />
-      <UtilityList snapshot={snapshot} />
       <SettingsPanel draft={draft} disabled={active || Boolean(extension.busyAction)} saveStatus={extension.settingsNotice} onChange={(next) => { setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} onSave={() => void extension.saveSettings(draft).catch(() => undefined)} />
       <AdvancedRulesPanel draft={ruleDraft} disabled={active || Boolean(extension.busyAction)} onChange={setRuleDraft} onSave={() => void extension.saveRules(ruleDraft).catch(() => undefined)} />
       <details className="notice-disclosure">

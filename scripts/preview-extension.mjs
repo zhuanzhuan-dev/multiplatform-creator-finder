@@ -73,6 +73,19 @@ const browserMock = `<script>
     outboxCount: 0,
     teamDestination: { name: "研究台 · No Swipe" }
   };
+  const storageListeners = new Set();
+  const previewStorageKey = "draPreviewStorage";
+  const readStored = () => JSON.parse(localStorage.getItem(previewStorageKey) || "{}");
+  const emitChanges = (before, after) => {
+    const changes = {};
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) changes[key] = { oldValue: before[key], newValue: after[key] };
+    }
+    for (const listener of storageListeners) listener(changes, "local");
+  };
+  window.addEventListener("storage", event => {
+    if (event.key === previewStorageKey) emitChanges(JSON.parse(event.oldValue || "{}"), JSON.parse(event.newValue || "{}"));
+  });
   window.chrome = {
     windows: { getCurrent: async () => ({ id: 1 }) },
     tabs: { query: async () => [{ id: 101, windowId: 1, active: true, url: ${JSON.stringify(DOUYIN_RECOMMEND_URL)} }] },
@@ -83,8 +96,16 @@ const browserMock = `<script>
       onMessage: { addListener() {}, removeListener() {} }
     },
     storage: {
-      local: { get: async () => ({ draState: snapshot.state }) },
-      onChanged: { addListener() {}, removeListener() {} }
+      local: {
+        get: async () => ({ draState: snapshot.state, ...readStored() }),
+        set: async values => {
+          const before = readStored();
+          const after = { ...before, ...values };
+          localStorage.setItem(previewStorageKey, JSON.stringify(after));
+          emitChanges(before, after);
+        }
+      },
+      onChanged: { addListener(listener) { storageListeners.add(listener); }, removeListener(listener) { storageListeners.delete(listener); } }
     }
   };
 })();

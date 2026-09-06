@@ -99,7 +99,7 @@ export interface CloudState {
 export interface Snapshot {
   state?: RunState;
   settings?: Settings;
-  settingsDraft?: Settings | null;
+  settingsDraft?: EditableNumbers<Settings> | null;
   rules?: unknown;
   cloud?: CloudState;
   schedule?: ScheduleSettings & { nextRunAt?: string; lastRunAt?: string; lastResult?: string };
@@ -107,15 +107,17 @@ export interface Snapshot {
   teamDestination?: { name?: string; ingest?: string };
 }
 
+export type EditableNumbers<T> = T extends number ? number | "" : T extends unknown[] ? T : T extends object ? { [K in keyof T]: EditableNumbers<T[K]> } : T;
+
 export interface SettingsDraft {
   dwellMode: DwellMode;
-  fixedDwellSeconds: number;
-  dwellMinSeconds: number;
-  dwellTypicalSeconds: number;
-  dwellMaxSeconds: number;
+  fixedDwellSeconds: number | "";
+  dwellMinSeconds: number | "";
+  dwellTypicalSeconds: number | "";
+  dwellMaxSeconds: number | "";
   targetMode: TargetMode;
-  targetDurationMinutes: number;
-  targetMaxItems: number;
+  targetDurationMinutes: number | "";
+  targetMaxItems: number | "";
   keepSystemAwake: boolean;
   markRejectedNotInterested: boolean;
   dryRun: boolean;
@@ -124,13 +126,13 @@ export interface SettingsDraft {
   scheduleWeekdays: number[];
   scheduleTimes: string[];
   scheduleTargetMode: TargetMode;
-  scheduleDurationMinutes: number;
-  scheduleMaxItems: number;
+  scheduleDurationMinutes: number | "";
+  scheduleMaxItems: number | "";
   scheduleReuseExistingTab: boolean;
-  scheduleLateToleranceMinutes: number;
+  scheduleLateToleranceMinutes: number | "";
 }
 
-export function settingsDraft(settings: Settings = {}): SettingsDraft {
+export function settingsDraft(settings: EditableNumbers<Settings> = {}): SettingsDraft {
   return {
     dwellMode: settings.dwell?.mode ?? "range",
     fixedDwellSeconds: settings.dwell?.fixedSeconds ?? 30,
@@ -158,7 +160,7 @@ export function settingsDraft(settings: Settings = {}): SettingsDraft {
 export interface CategoryRule {
   id: string;
   name: string;
-  score: number;
+  score: number | "";
   audience: string;
   keywords: string[];
   enabled?: boolean;
@@ -168,16 +170,16 @@ export interface RuleSettings {
   version?: number;
   includeLive: boolean;
   hard: {
-    minVideoDurationSeconds: number;
-    minVideoLikes: number;
-    preferredVideoLikes: number;
-    minFollowers: number;
-    maxFollowers: number;
+    minVideoDurationSeconds: number | "";
+    minVideoLikes: number | "";
+    preferredVideoLikes: number | "";
+    minFollowers: number | "";
+    maxFollowers: number | "";
   };
   lowFollowerNewAccount: {
     enabled: boolean;
-    maxVideos: number;
-    minAverageLikes: number;
+    maxVideos: number | "";
+    minAverageLikes: number | "";
     requireCompleteWorksList: boolean;
   };
   positiveCategories: CategoryRule[];

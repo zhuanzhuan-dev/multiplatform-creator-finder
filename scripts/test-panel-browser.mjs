@@ -1,5 +1,5 @@
-// Real headed Chrome + the built extension. Only the website response is a fixture.
-// No background-throttling switches, fake extension APIs, or production uploads.
+// Real toolbar action, side panel, extension storage and browser restart verification.
+// Uses an isolated Chrome profile; no pairing or uploads.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -12,7 +12,6 @@ const profile=process.env.RESUME_PROFILE || await mkdtemp(resolve(tmpdir(),'find
 if(process.env.RESUME_PROFILE) { const { unlink } = await import('node:fs/promises'); await unlink(resolve(profile,'DevToolsActivePort')).catch(()=>{}); }
 const executable=process.env.CHROME_BIN;
 if(!executable)throw new Error('Set CHROME_BIN to Chrome for Testing executable');
-const minutes=Number(process.env.SOAK_MINUTES||30);
 const chrome=spawn(executable,[`--user-data-dir=${profile}`,'--remote-debugging-port=0','--enable-unsafe-extension-debugging','--no-first-run','--no-default-browser-check',`--disable-extensions-except=${root}/dist`,`--load-extension=${root}/dist`,'about:blank'],{stdio:'ignore'});
 process.on('exit',()=>chrome.kill());
 let endpoint;
@@ -38,7 +37,9 @@ for(let i=0;i<50&&!extensionId;i++){
 }
 assert.ok(extensionId,'extension worker loaded');
 
-const report={profile,version:JSON.parse(await readFile(resolve(root,'dist/manifest.json'),'utf8')).version,startedAt:new Date().toISOString(),scenarios:[]};
+const hashes={};
+for(const name of ["background.js","content/douyin-content.js","manifest.json"]) hashes[name]=createHash("sha256").update(await readFile(resolve(root,"dist",name))).digest("hex");
+const report={profile,hashes,version:JSON.parse(await readFile(resolve(root,'dist/manifest.json'),'utf8')).version,startedAt:new Date().toISOString(),scenarios:[]};
 const output=resolve(root,process.env.RESUME_PROFILE?'test-results/panel-settings-restart.json':'test-results/panel-settings.json');
 await mkdir(resolve(root,'test-results'),{recursive:true});
 let panel;
@@ -59,7 +60,7 @@ try {
  const blank=(await cmd('Target.getTargets',{filter:[{type:'tab',exclude:false},{exclude:true}]})).targetInfos.find(t=>t.type==='tab'&&t.url==='about:blank');
  assert.ok(blank);
  const w=(await cmd('Target.getTargets')).targetInfos.find(t=>t.url===`chrome-extension://${extensionId}/background.js`);const sw=await attach(w.targetId);
- await delay(1000);console.log(JSON.stringify(await evaluate(sw,`Promise.all([chrome.sidePanel.getPanelBehavior(),chrome.sidePanel.getOptions({}),chrome.tabs.query({}).then(async tabs=>Promise.all(tabs.map(async t=>({id:t.id,...await chrome.sidePanel.getOptions({tabId:t.id})}))))])`)));
+ await waitFor(()=>evaluate(sw,`chrome.sidePanel.getPanelBehavior().then(p=>p.openPanelOnActionClick)`),'toolbar behavior configured');
  await cmd('Target.detachFromTarget',{sessionId:sw});
  await cmd('Extensions.triggerAction',{id:extensionId,targetId:blank.targetId});
  await findPanel();

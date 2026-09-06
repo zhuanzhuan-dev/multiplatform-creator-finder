@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NumberInput, inputNumber } from "../shared/NumberInput";
 import { decisionMeta, decisionsFor, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
 import { RadarDisplay } from "./RadarDisplay";
 import type { CategoryRule, CloudState, RuleSettings, RunState, SettingsDraft, Snapshot, Stats } from "./types";
@@ -35,6 +36,7 @@ interface RunOverviewProps {
   state: RunState;
   cloud?: CloudState;
   outboxCount: number;
+  schedule?: Snapshot["schedule"];
   now: number;
   busyAction: string;
   onStart(): void;
@@ -42,7 +44,7 @@ interface RunOverviewProps {
   onStop(): void;
 }
 
-export function RunOverview({ state, cloud, outboxCount, now, busyAction, onStart, onPause, onStop }: RunOverviewProps) {
+export function RunOverview({ state, cloud, outboxCount, schedule, now, busyAction, onStart, onPause, onStop }: RunOverviewProps) {
   const active = state.status === "starting" || state.status === "running";
   const uploadHealth = cloud?.connected ? outboxCount > 0 ? `待上传 ${outboxCount} 条` : "上传正常" : "研究台未连接";
   const phaseLabels: Record<string, string> = { read: "读取视频", profile: "读取达人", dwell: "等待切换", submit: "保存结果", transition: "切换视频", idle: "准备下一条" };
@@ -78,8 +80,11 @@ export function RunOverview({ state, cloud, outboxCount, now, busyAction, onStar
         <button className="danger-secondary" disabled={Boolean(busyAction) || state.status === "idle" || state.status === "stopped"} onClick={onStop}>停止本轮</button>
       </div>
       <details className="health-details">
-        <summary><span>{health}</span><span className="detail-action">查看详情</span></summary>
+        <summary><span>{health}{state.lastError && !health.includes(state.lastError) ? <span className="health-alert">最近异常：{state.lastError}</span> : null}</span><span className="detail-action">查看详情</span></summary>
         <dl className="mini-details">
+          <div><dt>待上传队列</dt><dd>{outboxCount} 条</dd></div>
+          <div><dt>下次定时</dt><dd>{schedule?.enabled ? formatLocalDateTime(schedule.nextRunAt) : "已停用"}</dd></div>
+          <div><dt>定时结果</dt><dd>{schedule?.lastResult ? `${formatLocalDateTime(schedule.lastRunAt)}｜${schedule.lastResult}` : "—"}</dd></div>
           <div><dt>暂停原因</dt><dd>{state.pauseReason || "—"}</dd></div>
           <div><dt>具体错误</dt><dd>{state.lastError || "—"}</dd></div>
           <div><dt>运行页面</dt><dd>{backgroundHealth}</dd></div>
@@ -200,7 +205,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }: SettingsPanelProps) {
   const number = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    onChange({ ...draft, [key]: Number(event.target.value) });
+    onChange({ ...draft, [key]: inputNumber(event.target.value) });
   };
   const checkbox = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, [key]: event.target.checked });
@@ -238,12 +243,12 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
             <button className={draft.dwellMode === "range" ? "selected" : ""} disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "range" })}>随机区间</button>
           </div>
           {draft.dwellMode === "fixed" ? (
-            <div className="form-grid one-field"><label>每条停留（秒）<input type="number" min="5" max="300" value={draft.fixedDwellSeconds} disabled={disabled} onChange={number("fixedDwellSeconds")} /></label></div>
+            <div className="form-grid one-field"><label>每条停留（秒）<NumberInput min="5" max="300" value={draft.fixedDwellSeconds} disabled={disabled} onChange={number("fixedDwellSeconds")} /></label></div>
           ) : (
             <div className="form-grid three-fields">
-              <label>最短（秒）<input type="number" min="5" max="300" value={draft.dwellMinSeconds} disabled={disabled} onChange={number("dwellMinSeconds")} /></label>
-              <label>中心（秒）<input type="number" min="5" max="300" value={draft.dwellTypicalSeconds} disabled={disabled} onChange={number("dwellTypicalSeconds")} /></label>
-              <label>最长（秒）<input type="number" min="5" max="300" value={draft.dwellMaxSeconds} disabled={disabled} onChange={number("dwellMaxSeconds")} /></label>
+              <label>最短（秒）<NumberInput min="5" max="300" value={draft.dwellMinSeconds} disabled={disabled} onChange={number("dwellMinSeconds")} /></label>
+              <label>中心（秒）<NumberInput min="5" max="300" value={draft.dwellTypicalSeconds} disabled={disabled} onChange={number("dwellTypicalSeconds")} /></label>
+              <label>最长（秒）<NumberInput min="5" max="300" value={draft.dwellMaxSeconds} disabled={disabled} onChange={number("dwellMaxSeconds")} /></label>
             </div>
           )}
           <button className="preset-button" disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "range", dwellMinSeconds: 10, dwellTypicalSeconds: 20, dwellMaxSeconds: 30 })}>应用随机预设</button>
@@ -254,8 +259,8 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
           <div className="setting-heading"><strong id="targetSettingTitle">本轮目标</strong><span>达到任一启用条件即停止</span></div>
           <div className="form-grid">
             <label>停止方式<select value={draft.targetMode} disabled={disabled} onChange={(event) => onChange({ ...draft, targetMode: event.target.value as SettingsDraft["targetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label>
-            {draft.targetMode !== "count" ? <label>运行时长（分钟）<input type="number" min="1" max="1440" value={draft.targetDurationMinutes} disabled={disabled} onChange={number("targetDurationMinutes")} /></label> : null}
-            {draft.targetMode !== "time" ? <label>视频数量（条）<input type="number" min="1" max="5000" value={draft.targetMaxItems} disabled={disabled} onChange={number("targetMaxItems")} /></label> : null}
+            {draft.targetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.targetDurationMinutes} disabled={disabled} onChange={number("targetDurationMinutes")} /></label> : null}
+            {draft.targetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.targetMaxItems} disabled={disabled} onChange={number("targetMaxItems")} /></label> : null}
           </div>
         </section>
 
@@ -271,9 +276,9 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
             </div>
             <div className="form-grid">
               <label>任务目标<select value={draft.scheduleTargetMode} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => onChange({ ...draft, scheduleTargetMode: event.target.value as SettingsDraft["scheduleTargetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label>
-              {draft.scheduleTargetMode !== "count" ? <label>运行时长（分钟）<input type="number" min="1" max="1440" value={draft.scheduleDurationMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleDurationMinutes")} /></label> : null}
-              {draft.scheduleTargetMode !== "time" ? <label>视频数量（条）<input type="number" min="1" max="5000" value={draft.scheduleMaxItems} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleMaxItems")} /></label> : null}
-              <label>迟到容忍（分钟）<input type="number" min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
+              {draft.scheduleTargetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.scheduleDurationMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleDurationMinutes")} /></label> : null}
+              {draft.scheduleTargetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.scheduleMaxItems} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleMaxItems")} /></label> : null}
+              <label>迟到容忍（分钟）<NumberInput min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
             </div>
             <label className="check"><input type="checkbox" checked={draft.scheduleReuseExistingTab} disabled={disabled || !draft.scheduleEnabled} onChange={checkbox("scheduleReuseExistingTab")} />优先复用插件创建的抖音任务页</label>
             <button className="preset-button" disabled={disabled} onClick={applyPreset}>应用默认预设</button>
@@ -309,9 +314,9 @@ function terms(value: string): string[] {
 
 export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: AdvancedRulesPanelProps) {
   const setHard = (key: keyof RuleSettings["hard"]) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    onChange({ ...draft, hard: { ...draft.hard, [key]: Number(event.target.value) } });
+    onChange({ ...draft, hard: { ...draft.hard, [key]: inputNumber(event.target.value) } });
   };
-  const setLowFollower = (key: keyof RuleSettings["lowFollowerNewAccount"], value: number | boolean) => {
+  const setLowFollower = (key: keyof RuleSettings["lowFollowerNewAccount"], value: number | "" | boolean) => {
     onChange({ ...draft, lowFollowerNewAccount: { ...draft.lowFollowerNewAccount, [key]: value } });
   };
   const updateCategory = (index: number, patch: Partial<CategoryRule>) => {
@@ -347,11 +352,11 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
         <section className="setting-group" aria-labelledby="hardRulesTitle">
           <div className="setting-heading"><strong id="hardRulesTitle">基础门槛</strong><span>先判断视频，再判断达人</span></div>
           <div className="form-grid">
-            <label>最短视频（秒）<input type="number" min="1" value={draft.hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
-            <label>最低点赞<input type="number" min="0" value={draft.hard.minVideoLikes} disabled={disabled} onChange={setHard("minVideoLikes")} /></label>
-            <label>优选点赞<input type="number" min="0" value={draft.hard.preferredVideoLikes} disabled={disabled} onChange={setHard("preferredVideoLikes")} /></label>
-            <label>最低粉丝<input type="number" min="0" value={draft.hard.minFollowers} disabled={disabled} onChange={setHard("minFollowers")} /></label>
-            <label>最高粉丝<input type="number" min="0" value={draft.hard.maxFollowers} disabled={disabled} onChange={setHard("maxFollowers")} /></label>
+            <label>最短视频（秒）<NumberInput min="1" value={draft.hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
+            <label>最低点赞<NumberInput min="0" value={draft.hard.minVideoLikes} disabled={disabled} onChange={setHard("minVideoLikes")} /></label>
+            <label>优选点赞<NumberInput min="0" value={draft.hard.preferredVideoLikes} disabled={disabled} onChange={setHard("preferredVideoLikes")} /></label>
+            <label>最低粉丝<NumberInput min="0" value={draft.hard.minFollowers} disabled={disabled} onChange={setHard("minFollowers")} /></label>
+            <label>最高粉丝<NumberInput min="0" value={draft.hard.maxFollowers} disabled={disabled} onChange={setHard("maxFollowers")} /></label>
           </div>
           <label className="check"><input type="checkbox" checked={draft.includeLive} disabled={disabled} onChange={(event) => onChange({ ...draft, includeLive: event.target.checked })} />将直播卡片纳入判断</label>
         </section>
@@ -362,8 +367,8 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
             <input aria-label="启用低粉新号例外" type="checkbox" checked={draft.lowFollowerNewAccount.enabled} disabled={disabled} onChange={(event) => setLowFollower("enabled", event.target.checked)} />
           </div>
           <div className={`form-grid ${draft.lowFollowerNewAccount.enabled ? "" : "disabled-fields"}`}>
-            <label>最多作品数<input type="number" min="1" value={draft.lowFollowerNewAccount.maxVideos} disabled={disabled || !draft.lowFollowerNewAccount.enabled} onChange={(event) => setLowFollower("maxVideos", Number(event.target.value))} /></label>
-            <label>最低平均点赞<input type="number" min="0" value={draft.lowFollowerNewAccount.minAverageLikes} disabled={disabled || !draft.lowFollowerNewAccount.enabled} onChange={(event) => setLowFollower("minAverageLikes", Number(event.target.value))} /></label>
+            <label>最多作品数<NumberInput min="1" step="1" value={draft.lowFollowerNewAccount.maxVideos} disabled={disabled || !draft.lowFollowerNewAccount.enabled} onChange={(event) => setLowFollower("maxVideos", inputNumber(event.target.value))} /></label>
+            <label>最低平均点赞<NumberInput min="0" value={draft.lowFollowerNewAccount.minAverageLikes} disabled={disabled || !draft.lowFollowerNewAccount.enabled} onChange={(event) => setLowFollower("minAverageLikes", inputNumber(event.target.value))} /></label>
           </div>
           <label className="check"><input type="checkbox" checked={draft.lowFollowerNewAccount.requireCompleteWorksList} disabled={disabled || !draft.lowFollowerNewAccount.enabled} onChange={(event) => setLowFollower("requireCompleteWorksList", event.target.checked)} />要求作品列表完整加载</label>
         </section>
@@ -381,7 +386,7 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
                   <label className="check"><input type="checkbox" checked={category.enabled !== false} disabled={disabled} onChange={(event) => updateCategory(index, { enabled: event.target.checked })} />启用这个类目</label>
                   <div className="form-grid">
                     <label>类目名称<input type="text" value={category.name} disabled={disabled} onChange={(event) => updateCategory(index, { name: event.target.value })} /></label>
-                    <label>命中加分<input type="number" min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: Number(event.target.value) })} /></label>
+                    <label>命中加分<NumberInput min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: inputNumber(event.target.value) })} /></label>
                   </div>
                   <label>受众描述<input type="text" value={category.audience} disabled={disabled} onChange={(event) => updateCategory(index, { audience: event.target.value })} /></label>
                   <label>关键词<textarea rows={3} value={category.keywords.join("、")} disabled={disabled} placeholder="美食、探店、烹饪" onChange={(event) => updateCategory(index, { keywords: terms(event.target.value) })} /></label>
@@ -402,17 +407,6 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
         <button className="primary compact save-rules" disabled={disabled} onClick={onSave}>保存高级规则</button>
       </div>
     </details>
-  );
-}
-
-export function UtilityList({ snapshot }: { snapshot: Snapshot }) {
-  const schedule = snapshot.schedule || {};
-  return (
-    <section className="utility-list" aria-label="运行辅助信息">
-      <div><span>待上传队列</span><strong>{snapshot.outboxCount || 0} 条</strong></div>
-      <div><span>下次定时</span><strong>{schedule.enabled ? formatLocalDateTime(schedule.nextRunAt) : "已停用"}</strong></div>
-      <div><span>定时结果</span><strong>{schedule.lastResult ? `${formatLocalDateTime(schedule.lastRunAt)}｜${schedule.lastResult}` : "—"}</strong></div>
-    </section>
   );
 }
 

@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import { themeReady } from "../shared/theme";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -17,17 +18,16 @@ function UpdatePage() {
           <h1>V{visibleVersion} 已就绪</h1>
         </div>
       </header>
-      <p className="lead">首次点击即可打开助手，运行设置自动保存，并提供默认的正态随机停留预设。</p>
+      <p className="lead">首页聚焦运行和判断结果，外观设置与辅助状态按需展开。</p>
       <section>
         <h2>本次更新</h2>
         <ul>
-          <li><strong>一次打开</strong><span>在任意标签页打开侧栏，点击“开始本轮”时选择或创建抖音推荐页。</span></li>
-          <li><strong>工作台入口</strong><span>顶部新增“打开工作台”，可直接进入研究台。</span></li>
-          <li><strong>自动保存</strong><span>运行设置编辑后自动保存，关闭重开仍保留；尚未通过校验的内容保存为草稿。</span></li>
-          <li><strong>随机预设</strong><span>新配置默认在 10–30 秒间按截断正态分布取值，中心为 20 秒。已保存的停留模式继续保留，可点击“应用随机预设”切换。</span></li>
+          <li><strong>右上角设置</strong><span>点击齿轮调整外观主题，支持点击外部或按 Esc 收起，主题偏好持续保存。</span></li>
+          <li><strong>运行详情收纳</strong><span>待上传队列、下次定时和定时结果移入“查看详情”，长结果完整换行显示。</span></li>
+          <li><strong>异常保持可见</strong><span>运行记录中存在异常时，概要区域保留提示，便于及时处理。</span></li>
         </ul>
       </section>
-      <aside>更新后请刷新已打开的抖音页面。随机节奏无法保证避免平台风控；运行期间保持电脑唤醒、Chrome 运行及网络可用。</aside>
+      <aside>重新加载扩展并打开侧栏即可看到新布局。</aside>
       <footer>
         {previousVersion ? <span>从 V{previousVersion} 更新</span> : <span>当前版本 V{visibleVersion}</span>}
         <button onClick={() => window.close()}>知道了</button>
@@ -36,4 +36,4 @@ function UpdatePage() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><UpdatePage /></StrictMode>);
+void themeReady.then(() => createRoot(document.getElementById("root")!).render(<StrictMode><UpdatePage /></StrictMode>));
