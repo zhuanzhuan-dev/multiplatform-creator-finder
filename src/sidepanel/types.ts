@@ -31,6 +31,15 @@ export interface RunState {
   runTrigger?: "manual" | "schedule";
   runTarget?: RunTarget | null;
   pageVisibility?: string;
+  keepAliveAt?: string;
+  runtime?: {
+    phase?: string;
+    deadlineAt?: number;
+    lastTransitionAt?: number;
+    plannedDwellSeconds?: number;
+    actualDwellSeconds?: number;
+    recoveryAttempts?: number;
+  };
   route?: { platform?: string; surface?: string; label?: string } | null;
   recentDecisions?: Decision[];
   lastDecision?: Decision | null;

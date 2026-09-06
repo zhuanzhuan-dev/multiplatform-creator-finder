@@ -82,6 +82,7 @@ export default defineConfig({
     rollupOptions: {
       input: [
         resolve(root, "sidepanel/index.html"),
+        resolve(root, "decisions/index.html"),
         resolve(root, "updates/index.html")
       ],
       output: {

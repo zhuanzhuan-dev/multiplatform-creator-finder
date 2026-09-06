@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>后台运行回归测试 · 本地模拟推荐流</title>
+<style>body{margin:0;background:#20242c;color:white;font:20px system-ui} [data-e2e=feed-item]{height:95vh;width:95vw;display:flex;gap:40px;padding:20px;box-sizing:border-box}#drawer{margin-left:auto;width:35vw;background:#343b49;padding:20px}button{padding:15px}img{width:80px;height:80px}a{color:#9dd}</style>
+<div data-e2e="feed-item"><section><h1>后台定时与切换测试</h1><p>本页为本地测试数据</p><div data-e2e="feed-video"><a id="author" data-e2e="feed-video-nickname" href="/user/test">@测试作者</a></div><div id="video" data-e2e-vid="100000001"></div><p data-e2e="video-desc">测试美食视频</p><p>00:01 / 01:30</p><p data-e2e="video-player-digg">5000</p><p id="counter">0 次切换</p></section>
+<aside id="drawer"><a href="/user/test">测试作者</a><p>10万粉丝</p><p>50万获赞</p><button role="tab" aria-selected="true">TA的作品</button><div data-e2e="author-card-list"><a href="/video/900000001"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="美食：测试作品">5000</a></div><p>已展示全部作品</p></aside></div>
+<script>
+window.fixtureEvents=[];window.fixtureStalled=false;
+let index=Number(sessionStorage.getItem('fixtureIndex')||0);
+function render(){document.querySelector('#video').setAttribute('data-e2e-vid',String(100000001+index));document.querySelector('#counter').textContent=index+' 次切换';}
+function next(e){if(!e.isTrusted||window.fixtureStalled)return;if(e.type==='keydown'&&!['ArrowDown','r'].includes(e.key))return;index++;sessionStorage.setItem('fixtureIndex',index);window.fixtureEvents.push({at:Date.now(),type:e.type,trusted:e.isTrusted,index});render();}
+addEventListener('keydown',next);addEventListener('wheel',next);render();
+</script>

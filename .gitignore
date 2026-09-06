@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 artifacts/
+test-results/
 bridge/bridge.config.json
 *.log
 .DS_Store

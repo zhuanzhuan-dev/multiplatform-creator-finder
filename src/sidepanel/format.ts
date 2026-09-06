@@ -44,6 +44,6 @@ export function decisionMeta(code = ""): { label: string; tone: string } {
 }
 
 export function decisionsFor(state: { recentDecisions?: Decision[]; lastDecision?: Decision | null }): Decision[] {
-  if (state.recentDecisions?.length) return state.recentDecisions.slice(0, 5);
+  if (state.recentDecisions?.length) return state.recentDecisions;
   return state.lastDecision ? [state.lastDecision] : [];
 }

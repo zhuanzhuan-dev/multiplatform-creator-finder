@@ -98,6 +98,8 @@ button.compact { min-height: 40px; }
 .decision-label.reject { background: #292e32; color: #aeb7bc; }
 .decision-reason { margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .decision-time { color: var(--quiet); font-size: 10px; white-space: nowrap; }
+.decision-toggle { width: 100%; min-height: 42px; border: 0; border-top: 1px solid var(--line-soft); border-radius: 0; background: #171c1f; color: var(--blue); font-size: 11px; font-weight: 700; }
+.decision-toggle:hover { border-color: var(--line-soft); background: #1d2327; }
 .empty-state { margin: 0; padding: 22px 14px; color: var(--quiet); font-size: 12px; text-align: center; }
 .primary-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px 12px 8px; }
 .primary-stats > div { min-width: 0; padding: 12px 8px; border: 1px solid #353d43; border-radius: 10px; background: var(--surface-strong); text-align: center; }

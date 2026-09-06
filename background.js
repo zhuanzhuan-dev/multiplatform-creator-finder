@@ -12,8 +12,10 @@ import {
   shrinkRecordsToByteLimit,
 } from "./lib/cloud.js";
 import { DEFAULT_RULES, DEFAULT_SETTINGS, INITIAL_STATE, STORAGE_KEYS, TEAM_DESTINATION, mergeRules, mergeSettings, validateSettings } from "./lib/defaults.js";
+import { normalizeDecisionHistory, prependDecision } from "./lib/decision-history.js";
 import { makeCreatorKey } from "./lib/normalizers.js";
 import { evaluateCreatorRules, evaluateVideoRules, scoreCreator, validateRules } from "./lib/rule-engine.js";
+import { createRunWaits, runtimeStalled, stepBudget, withTimeout } from "./lib/runtime-health.js";
 import { getRunLimitReason, normalizeRunTarget } from "./lib/run-limits.js";
 import { nextScheduledOccurrence, validateSchedule } from "./lib/scheduler.js";
 import { firstRunnableTabInWindow, isRunnableRoute, launchUrl, resolveRoute } from "./src/core/platform-router.ts";
@@ -38,6 +40,8 @@ let creatorIndex = {};
 let outbox = [];
 let cloudAuth = null;
 let pairing = null;
+const runWaits = createRunWaits();
+let watchdogInFlight = null;
 
 function isInvalidStoredCreatorName(value) {
   const text = String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().replace(/^@/, "");
@@ -70,11 +74,12 @@ async function initialize() {
     state = {
       ...cloneInitialState(),
       ...savedState,
-      recentDecisions: Array.isArray(savedState.recentDecisions) ? savedState.recentDecisions.slice(0, 5) : [],
+      recentDecisions: normalizeDecisionHistory(savedState.recentDecisions),
       stats: { ...INITIAL_STATE.stats, ...(savedState.stats || {}) }
     };
     if (state.status === "starting") {
       state.status = "paused";
+      runWaits.cancel();
       state.startupStage = "";
       state.pauseReason = "上次启动过程被 Chrome 中断，请重新开始本轮";
     }
@@ -114,6 +119,7 @@ async function initialize() {
     });
     await syncScheduleAlarm();
     await syncRunStopAlarm();
+    if (state.status === "running") await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
   })();
   return initialized;
 }
@@ -155,7 +161,7 @@ function recordDecision(decision = {}, observation = {}, profile = null) {
     occurredAt: new Date().toISOString()
   };
   state.lastDecision = entry;
-  state.recentDecisions = [entry, ...(Array.isArray(state.recentDecisions) ? state.recentDecisions : [])].slice(0, 5);
+  state.recentDecisions = prependDecision(state.recentDecisions, entry);
   return entry;
 }
 
@@ -261,8 +267,20 @@ async function finalizeObservationTransition(recordId, transition = {}) {
   return { ok: true, recordId };
 }
 
+async function settleInterruptedTransitions() {
+  let changed = false;
+  for (const item of outbox) {
+    if (item.sessionId !== state.runId || !item.transitionPending) continue;
+    item.transitionPending = false;
+    item.payload.transition_ok = null;
+    changed = true;
+  }
+  if (changed) await persistWorkData();
+}
+
 async function setPaused(reason, error = "") {
   state.status = "paused";
+  runWaits.cancel();
   state.endedAt = new Date().toISOString();
   state.startupStage = "";
   state.pauseReason = reason;
@@ -271,9 +289,10 @@ async function setPaused(reason, error = "") {
   await chrome.alarms.clear(WATCHDOG_ALARM);
   await chrome.alarms.clear(RUN_STOP_ALARM);
   if (state.feedTabId) {
-    chrome.tabs.sendMessage(state.feedTabId, { type: "DRA_STOP_LOOP", preserveRunId: true }).catch(() => undefined);
+    chrome.tabs.sendMessage(state.feedTabId, { type: "DRA_STOP_LOOP", loopId: state.loopId, preserveRunId: true }).catch(() => undefined);
   }
   await detachDebugger(state.feedTabId);
+  await settleInterruptedTransitions();
   await persistState();
 }
 
@@ -288,6 +307,11 @@ async function pauseForRunLimit(reason) {
 async function ensureDebugger(tabId) {
   if (!Number.isInteger(tabId)) throw new Error("缺少当前推荐流标签页");
   if (attachedDebuggerTabs.has(tabId)) return;
+  // A worker restart loses the Set while Chrome can retain our attachment.
+  if (state.feedTabId === tabId && state.status === "running") {
+    const owned = await chrome.debugger.sendCommand({ tabId }, "Page.getFrameTree").then(() => true, () => false);
+    if (owned) { attachedDebuggerTabs.add(tabId); return; }
+  }
   try {
     await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
   } catch (error) {
@@ -300,13 +324,34 @@ async function ensureDebugger(tabId) {
   attachedDebuggerTabs.add(tabId);
 }
 
+async function keepFeedPageActive(tabId) {
+  const runId = state.runId;
+  const apply = async () => {
+    await ensureDebugger(tabId);
+    await chrome.tabs.update(tabId, { autoDiscardable: false });
+    await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true });
+    await chrome.debugger.sendCommand({ tabId }, "Page.setWebLifecycleState", { state: "active" });
+  };
+  try { await apply(); } catch (error) {
+    if (!isActiveRunStatus() || state.runId !== runId) throw error;
+    attachedDebuggerTabs.delete(tabId);
+    await apply();
+  }
+  state.keepAliveAt = new Date().toISOString();
+}
+
 async function detachDebugger(tabId) {
   if (!Number.isInteger(tabId) || !attachedDebuggerTabs.has(tabId)) return;
+  await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => undefined);
   await chrome.debugger.detach({ tabId }).catch(() => undefined);
   attachedDebuggerTabs.delete(tabId);
 }
 
-async function dispatchTrustedKey(tabId, requestedKey) {
+function assertInputGeneration(tabId, loopId) {
+  if (state.status !== "running" || tabId !== state.feedTabId || loopId !== state.loopId) throw new Error("操作所属循环已结束");
+}
+
+async function dispatchTrustedKey(tabId, requestedKey, loopId) {
   const keys = {
     ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
     r: { key: "r", code: "KeyR", keyCode: 82 },
@@ -324,6 +369,7 @@ async function dispatchTrustedKey(tabId, requestedKey) {
     nativeVirtualKeyCode: selected.keyCode,
     modifiers: 0
   };
+  assertInputGeneration(tabId, loopId);
   await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...common });
   await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...common });
   return { ok: true, key: requestedKey };
@@ -344,6 +390,7 @@ async function validateTrustedPointer(tabId, payload, allowedTargets) {
   if (x < 0 || y < 0 || !Number.isFinite(width) || !Number.isFinite(height) || x > width || y > height) {
     throw new Error("后台鼠标坐标超出当前推荐页视口");
   }
+  assertInputGeneration(tabId, payload.loopId);
   return { x: Math.round(x), y: Math.round(y) };
 }
 
@@ -351,8 +398,8 @@ async function dispatchTrustedClick(tabId, payload = {}) {
   const point = await validateTrustedPointer(tabId, payload, new Set(["comment", "works"]));
   const target = { tabId };
   await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", ...point, button: "none" });
+  assertInputGeneration(tabId, payload.loopId);
   await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount: 1 });
-  await new Promise((resolve) => setTimeout(resolve, 60));
   await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", buttons: 0, clickCount: 1 });
   return { ok: true, target: payload.target };
 }
@@ -397,7 +444,7 @@ async function sendTabMessage(tabId, message, attempts = 8) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await chrome.tabs.sendMessage(tabId, message);
+      return await withTimeout(chrome.tabs.sendMessage(tabId, message), 5_000);
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -454,7 +501,7 @@ async function prepareFeedTab(tabId, runTrigger) {
   let tab = await requireFeedTab(tabId, { requireActive: !scheduled, requireFocused: !scheduled });
   tab = await waitForTabComplete(tab.id);
   tab = await ensureContentRuntime(tab);
-  await ensureDebugger(tab.id);
+  await keepFeedPageActive(tab.id);
   state.feedTabId = tab.id;
   state.feedWindowId = tab.windowId;
   state.backgroundMode = scheduled ? "scheduled-tab" : "current-tab";
@@ -501,8 +548,12 @@ async function scheduledFeedTab() {
   return { tab, createdByExtension: true };
 }
 
-function applyPageRuntimeState(status = {}) {
-  state.pageVisibility = status.visibilityState || state.pageVisibility || "unknown";
+async function applyPageRuntimeState(status = {}) {
+  const tab = await chrome.tabs.get(state.feedTabId).catch(() => null);
+  const windowInfo = tab ? await chrome.windows.get(tab.windowId).catch(() => null) : null;
+  // Focus emulation changes document.visibilityState; report the actual browser UI.
+  state.pageVisibility = tab ? tab.active && windowInfo?.focused && windowInfo.state !== "minimized" ? "visible" : "hidden" : "unknown";
+  state.emulatedVisibility = status.visibilityState || "unknown";
   state.pageHasFocus = typeof status.hasFocus === "boolean" ? status.hasFocus : state.pageHasFocus;
   const route = resolveRoute(status.url || "");
   state.route = route ? { platform: route.platform, surface: route.surface, label: route.label } : null;
@@ -996,6 +1047,8 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   state.status = "starting";
   state.startupStage = "正在连接研究台并绑定当前标签页";
   state.runId = runId;
+  state.loopId = crypto.randomUUID();
+  state.runtime = { phase: "idle", deadlineAt: Date.now() + 30_000, recoveryAttempts: 0 };
   state.runTrigger = trigger === "schedule" ? "schedule" : "manual";
   state.runTarget = effectiveTarget;
   state.runDurationMinutes = effectiveTarget.durationMinutes;
@@ -1029,9 +1082,9 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
     await syncRunStopAlarm();
     await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
-    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId });
+    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId, loopId: state.loopId });
     const runtimeStatus = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 2).catch(() => null);
-    if (runtimeStatus) applyPageRuntimeState(runtimeStatus);
+    if (runtimeStatus) await applyPageRuntimeState(runtimeStatus);
     await persistState();
     if (settings.cloud?.enabled && !settings.dryRun) {
       retryWriteErrors().catch(async (error) => {
@@ -1052,11 +1105,14 @@ async function stopRun() {
   await initialize();
   const feedTabId = state.feedTabId;
   const closeFeedTab = state.createdByExtension === true;
-  if (feedTabId) await chrome.tabs.sendMessage(feedTabId, { type: "DRA_STOP_LOOP" }).catch(() => undefined);
+  state.status = "stopped";
+  runWaits.cancel();
+  if (feedTabId) await sendTabMessage(feedTabId, { type: "DRA_STOP_LOOP" }, 1).catch(() => undefined);
   await chrome.alarms.clear(WATCHDOG_ALARM);
   await chrome.alarms.clear(RUN_STOP_ALARM);
   chrome.power.releaseKeepAwake();
   await detachDebugger(feedTabId);
+  await settleInterruptedTransitions();
   state.status = "stopped";
   state.endedAt = new Date().toISOString();
   state.startupStage = "";
@@ -1077,28 +1133,47 @@ async function stopRun() {
   return state;
 }
 
-async function watchdog() {
+async function restartContentLoop(tab, reason) {
+  const runId = state.runId;
+  const oldLoopId = state.loopId;
+  const resume = state.runtime?.phase === "dwell" ? { ...state.runtime } : null;
+  const attempts = Number(state.runtime?.recoveryAttempts || 0) + 1;
+  if (attempts > 2) return setPaused(`后台任务恢复失败：${reason}`);
+  // Invalidate the previous generation before asking the page to stop it.
+  state.loopId = crypto.randomUUID();
+  runWaits.cancel();
+  await settleInterruptedTransitions();
+  state.runtime = { ...state.runtime, phase: "idle", deadlineAt: Date.now() + 30_000, recoveryAttempts: attempts, recoveryReason: reason };
+  await persistState();
+  await sendTabMessage(tab.id, { type: "DRA_STOP_LOOP", loopId: oldLoopId }, 1).catch(() => undefined);
+  await keepFeedPageActive(tab.id);
+  if (state.status !== "running" || state.runId !== runId) return;
+  await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId, loopId: state.loopId, resume }, 2);
+}
+
+function watchdog() {
+  if (watchdogInFlight) return watchdogInFlight;
+  watchdogInFlight = inspectRuntime().finally(() => { watchdogInFlight = null; });
+  return watchdogInFlight;
+}
+
+async function inspectRuntime() {
   await initialize();
   if (state.status !== "running") return;
+  const runId = state.runId;
   const limitReason = getRunLimitReason(state, settings);
-  if (limitReason) {
-    await pauseForRunLimit(limitReason);
-    return;
-  }
-  const tab = await requireFeedTab(state.feedTabId, {
-    requireActive: false,
-    requireFocused: false
-  }).catch(() => null);
+  if (limitReason) return pauseForRunLimit(limitReason);
+  const tab = await requireFeedTab(state.feedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
   if (!tab) return setPaused("当前运行标签页已关闭或离开抖音推荐页");
-  const status = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 2).catch(() => null);
-  if (status) {
-    applyPageRuntimeState(status);
-    await persistState();
+  await keepFeedPageActive(tab.id);
+  if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
+  const status = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 1).catch(() => null);
+  if (state.status !== "running" || state.runId !== runId) return;
+  if (status) await applyPageRuntimeState(status);
+  if (!status?.running || status.runId !== runId || status.loopId !== state.loopId || runtimeStalled(state.runtime)) {
+    await restartContentLoop(tab, runtimeStalled(state.runtime) ? "当前步骤超时且没有完成进展" : "页面循环中断");
   }
-  if (!status?.running || status.runId !== state.runId) {
-    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId: state.runId })
-      .catch((error) => setPaused("无法恢复推荐流任务", error.message));
-  }
+  await persistState();
   await retryWriteErrors(3);
 }
 
@@ -1182,6 +1257,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url || tab.pendingUrl || "";
   configureSidePanelForTab(tabId, url).catch(() => undefined);
+  if (tabId === state.feedTabId && state.status === "running" && changeInfo.status === "complete") {
+    watchdog().catch((error) => setPaused("刷新后恢复失败", error.message));
+  }
   if (tabId === state.feedTabId && isActiveRunStatus() && !isRecommendationFeedUrl(url)) {
     setPaused("当前标签页已离开抖音推荐页").catch(() => undefined);
   }
@@ -1229,8 +1307,11 @@ chrome.action.onClicked.addListener((clickedTab) => {
   });
 });
 
-chrome.debugger.onDetach.addListener((source) => {
+chrome.debugger.onDetach.addListener((source, reason) => {
   if (Number.isInteger(source.tabId)) attachedDebuggerTabs.delete(source.tabId);
+  if (source.tabId === state.feedTabId && state.status === "running" && reason === "canceled_by_user") {
+    setPaused("页面调试连接已由用户或其他调试工具断开，请重新开始任务").catch(() => undefined);
+  }
 });
 
 async function stateSnapshotForTab(tabId) {
@@ -1250,7 +1331,8 @@ function requireBoundContentTab(sender, message) {
   if (!Number.isInteger(sender.tab?.id) || sender.tab.id !== state.feedTabId) {
     throw new Error("消息不是来自当前运行标签页");
   }
-  if (!message?.runId || message.runId !== state.runId) {
+  if (state.status !== "running" && message.type !== "DRA_TRANSITION_RESULT") throw new Error("任务已停止");
+  if (!message?.runId || message.runId !== state.runId || !message.loopId || message.loopId !== state.loopId) {
     throw new Error("消息不属于当前运行任务");
   }
 }
@@ -1267,6 +1349,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     await initialize();
     switch (message?.type) {
+      case "DRA_WAIT": {
+        requireBoundContentTab(sender, message);
+        if (state.status !== "running") return { ok: false, canceled: true };
+        const until = Number(message.until);
+        if (!Number.isFinite(until) || until > Date.now() + 300_000) throw new Error("无效的等待截止时间");
+        const result = await runWaits.wait(Math.min(until, Date.now() + 30_000));
+        requireBoundContentTab(sender, message);
+        const reason = getRunLimitReason(state, settings);
+        if (state.status === "running" && reason) await pauseForRunLimit(reason);
+        return { ...result, ok: result.ok && state.status === "running" };
+      }
+      case "DRA_PROGRESS": {
+        requireBoundContentTab(sender, message);
+        if (state.status !== "running") return { ok: false, canceled: true };
+        const now = Date.now();
+        const budget = stepBudget(message.phase, settings, message.waitUntil, now);
+        state.runtime = {
+          ...state.runtime, phase: message.phase, deadlineAt: now + budget, progressAt: now,
+          videoId: String(message.videoId || state.runtime?.videoId || ""),
+          cycleStartedAt: message.phase === "read" ? now
+            : message.phase === "dwell" && Number.isFinite(message.cycleStartedAt) && message.cycleStartedAt <= now
+              ? message.cycleStartedAt : state.runtime?.cycleStartedAt,
+          waitUntil: message.phase === "dwell" ? message.waitUntil : null,
+          plannedDwellSeconds: message.plannedDwellSeconds ?? state.runtime?.plannedDwellSeconds
+        };
+        if (message.phase === "submit") {
+          state.runtime.lastReadAt = now;
+          state.runtime.actualDwellSeconds = message.actualDwellSeconds;
+        }
+        if (message.phase === "idle" && message.transitionOk === true) {
+          state.runtime.lastTransitionAt = now;
+          state.runtime.recoveryAttempts = 0;
+        }
+        await persistState();
+        return { ok: true };
+      }
       case "DRA_GET_STATUS":
         return {
           ok: true,
@@ -1332,7 +1450,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return finalizeObservationTransition(message.recordId, message.transition || {});
       case "DRA_TRUSTED_KEY":
         requireBoundContentTab(sender, message);
-        return dispatchTrustedKey(sender.tab?.id, message.key);
+        return dispatchTrustedKey(sender.tab?.id, message.key, message.loopId);
       case "DRA_TRUSTED_CLICK":
         requireBoundContentTab(sender, message);
         return dispatchTrustedClick(sender.tab?.id, message);

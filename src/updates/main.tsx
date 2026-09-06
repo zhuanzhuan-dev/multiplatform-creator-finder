@@ -17,16 +17,16 @@ function UpdatePage() {
           <h1>V{visibleVersion} 已就绪</h1>
         </div>
       </header>
-      <p className="lead">多平台自动找号助手现在拥有清晰、统一的扩展图标，在扩展管理页、浏览器工具栏和系统界面中都能快速识别。</p>
+      <p className="lead">改善切换标签页或使用其他软件时的任务运行，让后台等待按实际经过时间推进，并在运行中断后尝试恢复。</p>
       <section>
         <h2>本次更新</h2>
         <ul>
-          <li><strong>全新图标</strong><span>使用“达人搜索与多平台连接”视觉符号，替换 Chrome 自动生成的灰色文字占位图。</span></li>
-          <li><strong>清晰适配</strong><span>提供 16、32、48 和 128 像素四档资源，在工具栏和扩展管理页保持清晰。</span></li>
-          <li><strong>轻量发布</strong><span>按实际显示尺寸压缩图标资源，四档文件合计约 33 KiB，不把高分辨率母版打入扩展。</span></li>
+          <li><strong>后台计时</strong><span>由扩展后台安排等待，按截止时间推进任务，并维持采集页面的活动状态。</span></li>
+          <li><strong>中断恢复</strong><span>页面刷新或运行停滞后尝试恢复，保留任务截止时间；暂停和停止会取消旧任务操作。</span></li>
+          <li><strong>进度可见</strong><span>侧栏显示当前处理步骤和真实前后台状态，持续异常时暂停并说明原因。</span></li>
         </ul>
       </section>
-      <aside>如果工具栏仍显示旧图标，请在扩展管理页重新加载扩展，或重启 Chrome 刷新图标缓存。</aside>
+      <aside>更新后请刷新已打开的抖音页面。运行期间保持电脑唤醒、Chrome 运行及网络可用。</aside>
       <footer>
         {previousVersion ? <span>从 V{previousVersion} 更新</span> : <span>当前版本 V{visibleVersion}</span>}
         <button onClick={() => window.close()}>知道了</button>

@@ -11,6 +11,8 @@ const STATUS_LABELS: Record<string, string> = {
   stopped: "已停止"
 };
 
+const COLLAPSED_DECISION_COUNT = 5;
+
 function runningTime(state: RunState, now: number): string {
   const startedAt = Date.parse(state.startedAt || "");
   if (!Number.isFinite(startedAt)) return "00:00:00";
@@ -43,12 +45,16 @@ interface RunOverviewProps {
 export function RunOverview({ state, cloud, outboxCount, now, busyAction, onStart, onPause, onStop }: RunOverviewProps) {
   const active = state.status === "starting" || state.status === "running";
   const uploadHealth = cloud?.connected ? outboxCount > 0 ? `待上传 ${outboxCount} 条` : "上传正常" : "研究台未连接";
+  const phaseLabels: Record<string, string> = { read: "读取视频", profile: "读取达人", dwell: "等待切换", submit: "保存结果", transition: "切换视频", idle: "准备下一条" };
+  const runtimeHealth = state.runtime?.deadlineAt && now > state.runtime.deadlineAt + 15_000
+    ? "当前步骤超时，等待自动恢复"
+    : phaseLabels[state.runtime?.phase || ""] || "准备运行";
   const health = state.status === "paused"
       ? `已暂停 · ${state.pauseReason || state.lastError || "等待继续"}`
     : state.status === "starting"
       ? state.startupStage || "正在绑定当前标签页"
       : state.status === "running"
-        ? `暂无暂停原因 · ${uploadHealth}`
+        ? `${runtimeHealth} · ${uploadHealth}`
         : `等待开始 · ${uploadHealth}`;
   const visibilityLabels: Record<string, string> = { visible: "前台运行", hidden: "后台运行", loading: "加载中", unknown: "状态未知" };
   const tabModeLabels: Record<string, string> = { "current-tab": "当前标签页", "scheduled-tab": "定时任务页" };
@@ -85,11 +91,13 @@ export function RunOverview({ state, cloud, outboxCount, now, busyAction, onStar
 
 export function RecentDecisions({ state, now }: { state: RunState; now: number }) {
   const decisions = decisionsFor(state);
+  const visibleDecisions = decisions.slice(0, COLLAPSED_DECISION_COUNT);
+  const openDecisionHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
-      <div className="section-heading"><h2 id="decisionTitle">最近判断</h2><span className="section-meta">最近 {decisions.length} 条</span></div>
-      <div className="decision-list">
-        {decisions.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : decisions.map((decision, index) => {
+      <div className="section-heading"><h2 id="decisionTitle">最近判断</h2><span className="section-meta">共 {decisions.length} 条</span></div>
+      <div className="decision-list" id="recentDecisionList">
+        {decisions.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : visibleDecisions.map((decision, index) => {
           const meta = decisionMeta(decision.code);
           return (
             <article className="decision-row" key={`${decision.occurredAt || "decision"}-${index}`}>
@@ -103,6 +111,15 @@ export function RecentDecisions({ state, now }: { state: RunState; now: number }
           );
         })}
       </div>
+      {decisions.length > 0 ? (
+        <button
+          className="decision-toggle"
+          type="button"
+          onClick={() => void openDecisionHistory()}
+        >
+          在完整页面查看（{decisions.length}）
+        </button>
+      ) : null}
     </section>
   );
 }

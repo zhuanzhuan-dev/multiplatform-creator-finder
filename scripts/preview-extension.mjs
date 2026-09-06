@@ -30,7 +30,12 @@ const browserMock = `<script>
       route: { platform: "douyin", surface: "recommend", label: "抖音推荐" },
       recentDecisions: [
         { accountName: "山野厨房", code: "ACCEPTED", reasons: ["A级", "美食"], occurredAt: new Date(now - 60000).toISOString() },
-        { accountName: "小林的数字生活", code: "ACCEPTED_REVIEW", reasons: ["B级", "需人工复核"], occurredAt: new Date(now - 180000).toISOString() }
+        { accountName: "小林的数字生活", code: "ACCEPTED_REVIEW", reasons: ["B级", "需人工复核"], occurredAt: new Date(now - 180000).toISOString() },
+        { accountName: "游戏研究社", code: "CATEGORY_BLACKLIST", reasons: ["命中游戏黑名单", "和平精英"], occurredAt: new Date(now - 360000).toISOString() },
+        { accountName: "阿远去旅行", code: "ACCEPTED", reasons: ["A级", "旅行 Vlog"], occurredAt: new Date(now - 480000).toISOString() },
+        { accountName: "今日直播间", code: "LIVE_SKIPPED", reasons: ["直播卡片已跳过"], occurredAt: new Date(now - 620000).toISOString() },
+        { accountName: "数码修理铺", code: "LIKES_MISSING", reasons: ["当前视频点赞数未读取"], occurredAt: new Date(now - 740000).toISOString() },
+        { accountName: "一人食日记", code: "ACCEPTED", reasons: ["S级", "美食", "互动稳定"], occurredAt: new Date(now - 900000).toISOString() }
       ],
       stats: { scanned: 38, matched: 7, reviewQueued: 2, newCreators: 5, duplicates: 3, notInterested: 20, liveSkipped: 1, panelSkipped: 2, uploaded: 36 }
     },
@@ -76,6 +81,10 @@ const browserMock = `<script>
       getManifest: () => (${JSON.stringify({ version: extensionManifest.version, version_name: extensionManifest.version_name })}),
       sendMessage: (message, callback) => queueMicrotask(() => callback(message.type === "DRA_GET_STATUS" ? snapshot : { ...snapshot, ok: true })),
       onMessage: { addListener() {}, removeListener() {} }
+    },
+    storage: {
+      local: { get: async () => ({ draState: snapshot.state }) },
+      onChanged: { addListener() {}, removeListener() {} }
     }
   };
 })();
