@@ -142,20 +142,24 @@ export function StatsOverview({ state, now }: { state: RunState; now: number }) 
   const stats = state.stats || {};
   return (
     <section className="stats-section" aria-labelledby="statsTitle">
-      <div className="section-heading"><h2 id="statsTitle">运行概览</h2><span className="section-meta">{state.lastTickAt ? `${formatRelativeTime(state.lastTickAt, now)}更新` : "等待更新"}</span></div>
-      <div className="primary-stats">
-        <div><span>规则命中</span><strong>{stat(stats, "matched")}</strong><small>本轮累计</small></div>
-        <div><span>新增账号</span><strong>{stat(stats, "newCreators")}</strong><small>本轮累计</small></div>
-        <div className="review"><span>需复核入表</span><strong>{stat(stats, "reviewQueued")}</strong><small>待处理</small></div>
-      </div>
-      <div className="compact-stats">
-        <div><span>已刷视频</span><strong>{stat(stats, "scanned")}</strong></div>
-        <div><span>去重拦截</span><strong>{stat(stats, "duplicates")}</strong></div>
-        <div><span>已标记不感兴趣</span><strong>{stat(stats, "notInterested")}</strong></div>
-        <div><span>跳过直播</span><strong>{stat(stats, "liveSkipped")}</strong></div>
-        <div><span>侧栏失败跳过</span><strong>{stat(stats, "panelSkipped")}</strong></div>
-        <div><span>已上传观察</span><strong>{stat(stats, "uploaded")}</strong></div>
-      </div>
+      <div className="section-heading"><h2 id="statsTitle">运行概览</h2><span className="section-meta" title={state.lastTickAt ? `${formatRelativeTime(state.lastTickAt, now)}更新` : "等待更新"}>本轮累计</span></div>
+      <dl className="primary-stats">
+        <div><dt>规则命中</dt><dd><strong>{stat(stats, "matched")}</strong></dd></div>
+        <div><dt>新增账号</dt><dd><strong>{stat(stats, "newCreators")}</strong></dd></div>
+        <div className={stat(stats, "reviewQueued") > 0 ? "review" : "neutral"}><dt>需复核入表</dt><dd><strong>{stat(stats, "reviewQueued")}</strong></dd></div>
+      </dl>
+      <details className="stats-details">
+        <summary>
+          <span className="stats-throughput"><span>已刷 <strong>{stat(stats, "scanned")}</strong></span><span>已上传 <strong>{stat(stats, "uploaded")}</strong></span></span>
+          <span className="stats-detail-action"><span className="when-closed">过程明细</span><span className="when-open">收起明细</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></span>
+        </summary>
+        <dl className="stats-breakdown">
+          <div><dt>去重拦截</dt><dd>{stat(stats, "duplicates")}</dd></div>
+          <div><dt>已标记不感兴趣</dt><dd>{stat(stats, "notInterested")}</dd></div>
+          <div><dt>跳过直播</dt><dd>{stat(stats, "liveSkipped")}</dd></div>
+          <div><dt>侧栏失败跳过</dt><dd>{stat(stats, "panelSkipped")}</dd></div>
+        </dl>
+      </details>
     </section>
   );
 }

@@ -18,13 +18,13 @@ function UpdatePage() {
           <h1>V{visibleVersion} 已就绪</h1>
         </div>
       </header>
-      <p className="lead">首页聚焦运行和判断结果，外观设置与辅助状态按需展开。</p>
+      <p className="lead">运行概览改为紧凑的结果摘要，首页保留关键指标，过程数据按需展开。</p>
       <section>
         <h2>本次更新</h2>
         <ul>
-          <li><strong>右上角设置</strong><span>点击齿轮调整外观主题，支持点击外部或按 Esc 收起，主题偏好持续保存。</span></li>
-          <li><strong>运行详情收纳</strong><span>待上传队列、下次定时和定时结果移入“查看详情”，长结果完整换行显示。</span></li>
-          <li><strong>异常保持可见</strong><span>运行记录中存在异常时，概要区域保留提示，便于及时处理。</span></li>
+          <li><strong>关键结果一眼可见</strong><span>规则命中、新增账号和需复核入表保持展示，移除重复卡片边框和累计说明。</span></li>
+          <li><strong>过程明细按需展开</strong><span>已刷和已上传显示在一行，去重、标记不感兴趣及跳过原因点击查看。</span></li>
+          <li><strong>清晰的状态层级</strong><span>有需复核记录时用琥珀色强调，为零时显示中性色，支持键盘展开和大字号换行。</span></li>
         </ul>
       </section>
       <aside>重新加载扩展并打开侧栏即可看到新布局。</aside>
