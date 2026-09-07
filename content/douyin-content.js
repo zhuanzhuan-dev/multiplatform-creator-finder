@@ -431,6 +431,13 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           running = false;
           return;
         }
+        if (result.engagementActions?.length) {
+          for (const action of result.engagementActions) {
+            assertRunning();
+            await sendRuntime({ type: "DRA_ENGAGE", action, videoId: observation.videoId }).catch(() => undefined);
+          }
+        }
+        assertRunning();
         const changed = await performAndReportTransition(result.observationRecordId, result.action || "advance", previousFingerprint, beforeUrl);
         if (changed.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: changed.blockedReason });

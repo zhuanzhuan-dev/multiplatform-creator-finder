@@ -64,6 +64,7 @@ export function useExtensionState() {
     const current = snapshot.settings || {};
     const settings = {
       ...current,
+      engagement: { rate: draft.engagementRate, like: draft.engagementLike, collect: draft.engagementCollect, follow: draft.engagementFollow },
       dwell: {
         mode: draft.dwellMode,
         fixedSeconds: draft.fixedDwellSeconds,

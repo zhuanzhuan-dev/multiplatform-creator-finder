@@ -1,3 +1,4 @@
+import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
 import { rawSamples } from "./lib/raw-sample-store.js";
 import { sanitizeRaw } from "./lib/raw-sample.js";
 import { accountProfile } from "./lib/account-profile.js";
@@ -91,6 +92,7 @@ async function initialize() {
     state = {
       ...cloneInitialState(),
       ...savedState,
+      engagement: restoreEngagement(savedState.engagement),
       stats: { ...INITIAL_STATE.stats, ...(savedState.stats || {}) }
     };
     await migrateDecisionHistory(saved);
@@ -456,6 +458,10 @@ async function dispatchTrustedKey(tabId, requestedKey, loopId) {
   };
   const selected = keys[requestedKey];
   if (!selected) throw new Error("不允许的后台按键");
+  return sendTrustedKey(tabId, selected, loopId);
+}
+
+async function sendTrustedKey(tabId, selected, loopId, beforeSend = () => {}) {
   if (tabId !== state.feedTabId) throw new Error("按键请求不是来自本轮当前标签页");
   await ensureDebugger(tabId);
   const target = { tabId };
@@ -467,9 +473,10 @@ async function dispatchTrustedKey(tabId, requestedKey, loopId) {
     modifiers: 0
   };
   assertInputGeneration(tabId, loopId);
+  beforeSend();
   await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...common });
   await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...common });
-  return { ok: true, key: requestedKey };
+  return { ok: true, key: selected.key };
 }
 
 async function validateTrustedPointer(tabId, payload, allowedTargets) {
@@ -489,6 +496,34 @@ async function validateTrustedPointer(tabId, payload, allowedTargets) {
   }
   assertInputGeneration(tabId, payload.loopId);
   return { x: Math.round(x), y: Math.round(y) };
+}
+
+let engagementQueue = Promise.resolve();
+async function performEngagement(tabId, message) {
+  const { action, videoId, loopId } = message;
+  const ledger = state.engagement;
+  if (state.status !== "running" || state.feedTabId !== tabId || state.loopId !== loopId || !canEngage(ledger, action, videoId, loopId)) {
+    return { ok: true, skipped: true, reason: "未启用、非正向结果或配额不足" };
+  }
+  const key = reserveEngagement(ledger, action, videoId, loopId);
+  if (!key) return { ok: true, skipped: true };
+  await persistState();
+  const selected = ENGAGEMENT_KEYS[action];
+  try {
+    await sendTrustedKey(tabId, selected, loopId, () => {
+      if (state.engagement !== ledger || ledger.candidate?.videoId !== videoId || ledger.candidate?.loopId !== loopId) throw new Error("互动所属视频或轮次已变化");
+    });
+    ledger.attempts[key] = "sent";
+    ledger.sent[action] += 1;
+    ledger.lastResult = `已发送 ${selected.key.toUpperCase()} 快捷键，未检查平台结果`;
+    await persistState();
+    return { ok: true, sent: true, key: selected.key };
+  } catch (error) {
+    ledger.attempts[key] = "unknown";
+    ledger.lastResult = "快捷键发送未完成，保留配额且不重试";
+    await persistState();
+    throw error;
+  }
 }
 
 async function dispatchTrustedClick(tabId, payload = {}) {
@@ -960,6 +995,7 @@ async function handleObservation(observation, profile, panelRecovered = false) {
     await persistState();
     return { continue: true, action: "advance", decision: state.lastDecision };
   }
+  state.engagement.candidate = null;
   dailyStats = recordDailyScan(dailyStats, fingerprint);
   if (seenVideos.includes(fingerprint)) {
     await persistState();
@@ -969,6 +1005,7 @@ async function handleObservation(observation, profile, panelRecovered = false) {
   seenVideos.push(fingerprint);
   seenVideos = seenVideos.slice(-MAX_SEEN_VIDEOS);
   increment("scanned");
+  if (observation.contentType === "video" && !contentSkipDecision(observation)) state.engagement.videos += 1;
   if (panelRecovered) increment("panelRecoveries");
   state.lastTickAt = new Date().toISOString();
   state.lastVideoId = observation.videoId || fingerprint;
@@ -1064,6 +1101,8 @@ async function handleObservation(observation, profile, panelRecovered = false) {
   const payload = candidatePayload(observation, profile, videoDecision, creatorDecision, score);
   const creatorKey = payload.creatorKey;
   const existing = creatorIndex[creatorKey];
+  const engagementEligible = categories.length > 0 && !payload.reviewRequired;
+  if (engagementEligible) state.engagement.candidate = { videoId: observation.videoId, creatorKey, loopId: state.loopId };
   const queued = await enqueueObservation(observationRecord(observation, profile, {
     isRelevant: true,
     decision: "keep",
@@ -1091,7 +1130,7 @@ async function handleObservation(observation, profile, panelRecovered = false) {
   }, observation, profile);
   await persistWorkData();
   await persistState();
-  return { continue: state.status === "running", action: "advance", decision: state.lastDecision, observationRecordId: queued.recordId };
+  return { continue: state.status === "running", action: "advance", engagementActions: engagementEligible ? ["like", "collect", "follow"].filter(action => canEngage(state.engagement, action, observation.videoId, state.loopId)) : [], decision: state.lastDecision, observationRecordId: queued.recordId };
 }
 
 async function handlePanelSkipped(observation, reason) {
@@ -1204,6 +1243,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   const lastScheduleResult = state.lastScheduleResult;
   state = {
     ...cloneInitialState(),
+    engagement: newEngagement(settings.engagement),
     feedTabId: requestedTab.id,
     feedWindowId: requestedTab.windowId,
     createdByExtension: requested.createdByExtension,
@@ -1718,6 +1758,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_TRANSITION_RESULT":
         requireBoundContentTab(sender, message);
         return finalizeObservationTransition(message.recordId, message.transition || {});
+      case "DRA_ENGAGE": {
+        requireBoundContentTab(sender, message);
+        const pending = engagementQueue.then(() => performEngagement(sender.tab.id, message));
+        engagementQueue = pending.catch(() => undefined);
+        return pending;
+      }
       case "DRA_TRUSTED_KEY":
         requireBoundContentTab(sender, message);
         return dispatchTrustedKey(sender.tab?.id, message.key, message.loopId);

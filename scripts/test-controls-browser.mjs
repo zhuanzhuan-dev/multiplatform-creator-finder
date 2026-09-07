@@ -29,9 +29,9 @@ for(let i=0;i<50&&!extensionId;i++){
  const {targetInfos}=await cmd('Target.getTargets');
  for(const worker of targetInfos.filter(t=>t.type==='service_worker'&&t.url.startsWith('chrome-extension://')&&t.url.endsWith('/background.js'))){
   const candidate=await attach(worker.targetId);
-  const manifest=await evaluate(candidate,'chrome.runtime.getManifest()');
+  const manifest=await evaluate(candidate,'globalThis.chrome?.runtime?.getManifest?.()');
   await cmd('Target.detachFromTarget',{sessionId:candidate});
-  if(manifest.name==='多平台自动找号助手'){extensionId=new URL(worker.url).host;break;}
+  if(manifest?.name==='多平台自动找号助手'){extensionId=new URL(worker.url).host;break;}
  }
  if(!extensionId)await delay(200);
 }
@@ -54,6 +54,7 @@ try{
  const input=(label)=>`[...document.querySelectorAll('label')].find(l=>l.firstChild.textContent.trim()===${JSON.stringify(label)})?.querySelector('input')`;
  const value=label=>api(`(${input(label)})?.value`);
  const clear=async label=>{
+  await api(`document.querySelector(${JSON.stringify(["中心（秒）", "最短（秒）", "最长（秒）"].includes(label)?"#configuration-tab-0":"#configuration-tab-1")}).click()`);
   await api(`(()=>{const e=${input(label)};if(!e)throw Error('missing input');e.focus();e.select();})()`);
   await cmd('Input.dispatchKeyEvent',{type:'keyDown',key:'Backspace',code:'Backspace',windowsVirtualKeyCode:8},panel);
   await cmd('Input.dispatchKeyEvent',{type:'keyUp',key:'Backspace',code:'Backspace',windowsVirtualKeyCode:8},panel);
@@ -61,6 +62,22 @@ try{
  const type=async text=>cmd('Input.insertText',{text},panel);
  const storage=()=>api(`chrome.storage.local.get(['draSettings','draSettingsDraft','draRules'])`);
  await openForms();
+ for(const theme of ['light','dark']) {
+  await api(`chrome.storage.local.set({draTheme:${JSON.stringify(theme)}})`);
+  await waitFor(()=>api(`document.documentElement.dataset.theme===${JSON.stringify(theme)}`),'layout theme switched');
+  for(const width of [280,320,360,520]) {
+   await cmd('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},panel);
+   await api(`document.querySelector('.three-fields').scrollIntoView({block:'center'})`);
+   const layout=await api(`(()=>{const inputs=[...document.querySelectorAll('.three-fields input')];return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,fields:inputs.map(e=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return {top:r.top,width:r.width,height:r.height,left:r.left,right:r.right,space:r.width-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)}})}})()`);
+   assert.equal(layout.fields.length,3);
+   assert.ok(layout.fields.every(f=>Math.abs(f.top-layout.fields[0].top)<1&&f.height>=44&&f.space>=40&&f.left>=0&&f.right<=width),JSON.stringify(layout));
+   assert.ok(layout.scrollWidth<=width,JSON.stringify(layout));
+   const shot=await cmd('Page.captureScreenshot',{format:'png'},panel);
+   await writeFile(resolve(root,`test-results/dwell-${theme}-${width}.png`),Buffer.from(shot.data,'base64'));
+  }
+ }
+ assert.equal(await api(`(${input('允许延迟启动（分钟）')}).getAttribute('aria-describedby')`),'scheduleDelayHelp');
+ report.scenarios.push('dwell-inputs-stay-in-one-row-at-280-320-360-520-in-both-themes');
  await clear('中心（秒）');assert.equal(await value('中心（秒）'),'');
  assert.equal(await api(`(${input('中心（秒）')}).getAttribute('aria-invalid')`),'true');
  await waitFor(async()=>(await storage()).draSettingsDraft?.dwell.typicalSeconds==='','blank draft persisted');
@@ -90,6 +107,7 @@ try{
  // A harmless preset button provides real pointer press/release feedback without starting collection.
  await cmd('Page.bringToFront',{},panel);
  await cmd('Emulation.setFocusEmulationEnabled',{enabled:true},panel);
+ await api(`document.querySelector('#configuration-tab-0').click()`);
  await api(`document.activeElement?.blur();document.querySelector('.preset-button').scrollIntoView({block:'center'})`);
  await delay(300);
  const center=await api(`(()=>{const r=document.querySelector('.preset-button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
@@ -104,6 +122,7 @@ try{
  // Verify actual cursor tracking on both a plain and a primary button, in both themes.
  const glow=selector=>api(`(()=>{const b=document.querySelector(${JSON.stringify(selector)});const p=getComputedStyle(b,'::before');return {active:b.hasAttribute('data-pointer-glow'),x:parseFloat(b.style.getPropertyValue('--pointer-x')),opacity:Number(p.opacity),gradient:p.backgroundImage};})()`);
  const moveWithin=async(selector,fraction)=>{
+  await api(`document.querySelector(${JSON.stringify(selector===".save-rules"?"#configuration-tab-1":"#configuration-tab-0")}).click()`);
   await cmd('Page.bringToFront',{},panel);
   let pos;
   // Capture/theme changes can settle scrolling after the first frame. Move at current screen coordinates.

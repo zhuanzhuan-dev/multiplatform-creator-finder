@@ -82,6 +82,11 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
       <details className="health-details">
         <summary><span className="run-health"><StatusBadge status={state.status} /><span>{health}{state.lastError && !health.includes(state.lastError) ? <span className="health-alert">最近异常：{state.lastError}</span> : null}</span></span><span className="detail-action">查看详情</span></summary>
         <dl className="mini-details">
+          {state.engagement && (state.engagement.policy.like || state.engagement.policy.collect || state.engagement.policy.follow) ? <>
+            <div><dt>本轮互动上限</dt><dd>{state.engagement.policy.rate}% · 已处理 {state.engagement.videos} 条普通视频</dd></div>
+            {([['like', '点赞'], ['collect', '收藏'], ['follow', '关注']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{state.engagement?.policy[key] ? `${state.engagement.sent[key] || 0} 次按键已发送 · 配额已用 ${state.engagement.used[key] || 0} / ${Math.floor(state.engagement.videos * state.engagement.policy.rate / 100)}` : "未启用"}</dd></div>)}
+            {state.engagement.lastResult ? <div><dt>最近互动</dt><dd>{state.engagement.lastResult}</dd></div> : null}
+          </> : null}
           <div><dt>同步方式</dt><dd>后台独立同步，暂停找号后继续处理队列</dd></div>
           <div><dt>待同步记录</dt><dd>{outboxCount} 条</dd></div>
           <div><dt>本轮已同步</dt><dd>{state.stats?.uploaded || 0} 条</dd></div>
@@ -237,8 +242,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
     scheduleLateToleranceMinutes: 10
   });
   return (
-    <details className="disclosure settings-disclosure">
-      <summary><strong>运行设置</strong><span className="summary-copy">停留、目标与定时</span></summary>
+    <div className="settings-disclosure">
       <div className="disclosure-body">
         <section className="setting-group" aria-labelledby="dwellSettingTitle">
           <div className="setting-heading"><strong id="dwellSettingTitle">单条停留</strong><span>通过筛选的视频按此停留，淘汰内容、图文和直播快速跳过</span></div>
@@ -283,8 +287,9 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
               <label>任务目标<select value={draft.scheduleTargetMode} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => onChange({ ...draft, scheduleTargetMode: event.target.value as SettingsDraft["scheduleTargetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label>
               {draft.scheduleTargetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.scheduleDurationMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleDurationMinutes")} /></label> : null}
               {draft.scheduleTargetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.scheduleMaxItems} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleMaxItems")} /></label> : null}
-              <label>迟到容忍（分钟）<NumberInput min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
+              <label>允许延迟启动（分钟）<NumberInput aria-describedby="scheduleDelayHelp" min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
             </div>
+            <p className="field-note" id="scheduleDelayHelp">定时触发晚于计划时，在此时间内仍可启动；超过则跳过本次任务。</p>
             <label className="check"><input type="checkbox" checked={draft.scheduleReuseExistingTab} disabled={disabled || !draft.scheduleEnabled} onChange={checkbox("scheduleReuseExistingTab")} />优先复用插件创建的抖音任务页</label>
             <button className="preset-button" disabled={disabled} onClick={applyPreset}>应用默认预设</button>
           </div>
@@ -301,7 +306,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
           <p className="field-note" role="status">{saveStatus}</p>
         </div>
       </div>
-    </details>
+    </div>
   );
 }
 
@@ -310,13 +315,14 @@ interface AdvancedRulesPanelProps {
   disabled: boolean;
   onChange(next: RuleSettings): void;
   onSave(): void;
+  engagement: React.ReactNode;
 }
 
 function terms(value: string): string[] {
   return [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
 }
 
-export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: AdvancedRulesPanelProps) {
+export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engagement }: AdvancedRulesPanelProps) {
   const setHard = (key: keyof RuleSettings["hard"]) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, hard: { ...draft.hard, [key]: inputNumber(event.target.value) } });
   };
@@ -350,8 +356,7 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
   };
 
   return (
-    <details className="disclosure rules-disclosure">
-      <summary><span><strong>视频与账号规则</strong><span className="summary-copy">想找的内容与排除条件</span></span></summary>
+    <div className="rules-disclosure">
       <div className="disclosure-body rules-form">
         <section className="setting-group" aria-labelledby="hardRulesTitle">
           <div className="setting-heading"><strong id="hardRulesTitle">视频与账号条件</strong><span>先判断视频，再判断达人</span></div>
@@ -380,6 +385,7 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
         <section className="setting-group" aria-labelledby="categoryRulesTitle">
           <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
           <p className="field-note">按视频描述、话题及账号资料中的关键词初筛。未匹配类别但满足其他条件的账号，仍保存为候选，交给人工确认。</p>
+          {engagement}
           <div className="category-list">
             {draft.positiveCategories.map((category, index) => (
               <details className="category-editor" key={category.id}>
@@ -411,7 +417,7 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave }: Advanc
 
         <button className="primary compact save-rules" disabled={disabled} onClick={onSave}>保存规则</button>
       </div>
-    </details>
+    </div>
   );
 }
 

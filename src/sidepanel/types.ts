@@ -27,6 +27,7 @@ export interface Decision {
 }
 
 export interface RunState {
+  engagement?: { policy: { rate: number; like: boolean; collect: boolean; follow: boolean }; videos: number; used: Record<string, number>; sent: Record<string, number>; lastResult: string };
   runId?: string;
   elapsedMs?: number | null;
   activeSince?: number | null;
@@ -84,6 +85,7 @@ export interface ScheduleSettings {
 }
 
 export interface Settings {
+  engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
   dwell?: DwellPolicy;
   target?: RunTarget;
   keepSystemAwake?: boolean;
@@ -125,6 +127,10 @@ export interface Snapshot {
 export type EditableNumbers<T> = T extends number ? number | "" : T extends unknown[] ? T : T extends object ? { [K in keyof T]: EditableNumbers<T[K]> } : T;
 
 export interface SettingsDraft {
+  engagementRate: number | "";
+  engagementLike: boolean;
+  engagementCollect: boolean;
+  engagementFollow: boolean;
   dwellMode: DwellMode;
   fixedDwellSeconds: number | "";
   dwellMinSeconds: number | "";
@@ -148,6 +154,10 @@ export interface SettingsDraft {
 
 export function settingsDraft(settings: EditableNumbers<Settings> = {}): SettingsDraft {
   return {
+    engagementRate: settings.engagement?.rate ?? 10,
+    engagementLike: settings.engagement?.like === true,
+    engagementCollect: settings.engagement?.collect === true,
+    engagementFollow: settings.engagement?.follow === true,
     dwellMode: settings.dwell?.mode ?? "range",
     fixedDwellSeconds: settings.dwell?.fixedSeconds ?? 30,
     dwellMinSeconds: settings.dwell?.minSeconds ?? 10,
