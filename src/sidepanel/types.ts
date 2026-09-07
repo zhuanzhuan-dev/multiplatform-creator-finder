@@ -14,6 +14,10 @@ export interface Stats {
 }
 
 export interface Decision {
+  sourcePlatform?: string;
+  id?: string;
+  runId?: string;
+  runStartedAt?: string;
   code?: string;
   reasons?: string[];
   accountName?: string;
@@ -49,7 +53,6 @@ export interface RunState {
     recoveryAttempts?: number;
   };
   route?: { platform?: string; surface?: string; label?: string } | null;
-  recentDecisions?: Decision[];
   lastDecision?: Decision | null;
   stats?: Stats;
 }
@@ -97,6 +100,7 @@ export interface Pairing {
 }
 
 export interface CloudState {
+  account?: { id: string; name: string; email: string } | null;
   connected?: boolean;
   expired?: boolean;
   userId?: string;
@@ -105,6 +109,8 @@ export interface CloudState {
 }
 
 export interface Snapshot {
+  decisionHistory?: Decision[];
+  decisionHistoryTotal?: number;
   daily?: { date: string; scanned: number };
   state?: RunState;
   settings?: Settings;

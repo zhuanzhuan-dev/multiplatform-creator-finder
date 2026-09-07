@@ -14,20 +14,21 @@ function UpdatePage() {
       <header>
         <img className="product-icon" src={iconUrl} alt="多平台自动找号助手图标" />
         <div>
-          <p className="eyebrow">版本更新</p>
-          <h1>V{visibleVersion} 已就绪</h1>
+          <p className="eyebrow">本地测试版本</p>
+          <h1>V{visibleVersion} 待测试</h1>
         </div>
       </header>
-      <p className="lead">收起面板，任务继续。通过页面悬浮入口或工具栏状态图标，随时回到找号助手。</p>
+      <p className="lead">停止后保留结果，最近记录跨轮次延续；设置中查看连接账号，并采样推荐流原始数据。</p>
       <section>
-        <h2>本次更新</h2>
+        <h2>待验证内容</h2>
         <ul>
-          <li><strong>悬浮任务入口</strong><span>抖音页面右侧显示雷达按钮，点击恢复侧栏；展开侧栏时自动隐藏。</span></li>
-          <li><strong>状态随时可见</strong><span>区分运行、暂停和结束状态，工具栏图标同步显示任务角标。</span></li>
-          <li><strong>位置与外观</strong><span>沿右边缘拖动并记住位置，支持键盘上下调整、浅色与深色主题，以及减少动态效果。</span></li>
+          <li><strong>结果保留</strong><span>停止后保留本轮统计和时长；开始新一轮后，近 24 小时的记录继续保留，侧栏展示最近 5 条，完整页面分页查看。</span></li>
+          <li><strong>平台来源</strong><span>每条记录展示抖音、快手、飞瓜或星图等实际来源，支持来源、轮次、结果和关键词筛选。</span></li>
+          <li><strong>连接账号</strong><span>设置中展示后台返回的姓名和邮箱。后台接口尚未部署时显示已连接账号 ID。</span></li>
+          <li><strong>本地原始采样</strong><span>开发调试中开启采样，保存当前卡片 DOM、解析结果及能读取到的原始字段；支持人工标记类型、导出和清空。</span></li>
         </ul>
       </section>
-      <aside>关闭侧栏后任务继续运行。关闭推荐流任务页会暂停找号，退出 Chrome 后任务无法继续执行。</aside>
+      <aside>此版本仅供本地测试，尚未发布。原始采样默认关闭，保存在本机，最多 200 条 / 25 MB。</aside>
       <footer>
         {previousVersion ? <span>从 V{previousVersion} 更新</span> : <span>当前版本 V{visibleVersion}</span>}
         <button onClick={() => window.close()}>知道了</button>

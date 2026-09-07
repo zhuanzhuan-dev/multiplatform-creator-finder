@@ -51,7 +51,7 @@ try {
  const sw=await attach(worker.targetId);
  const {targetId}=await cmd('Target.createTarget',{url:'about:blank'});const page=await attach(targetId);
  await cmd('Fetch.enable',{patterns:[{urlPattern:'https://www.douyin.com/*',requestStage:'Request'}]},page);
- listeners.add(m=>{if(m.sessionId===page&&m.method==='Fetch.requestPaused')void cmd('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html'}],body:Buffer.from('<!doctype html><html><body style="background:#edf2ef;height:2000px"><h1>隔离测试推荐页</h1></body></html>').toString('base64')},page);});
+ listeners.add(m=>{if(m.sessionId===page&&m.method==='Fetch.requestPaused')void cmd('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body:Buffer.from('<!doctype html><html><body style="background:#edf2ef;height:2000px"><h1>隔离测试推荐页</h1></body></html>').toString('base64')},page);});
  await cmd('Page.navigate',{url:'https://www.douyin.com/?recommend=1'},page);
  await waitFor(()=>evaluate(page,`Boolean(document.getElementById('dra-floating-launcher'))`),'launcher installed');
  await evaluate(sw,`launcherTest.set({status:'running',runId:'launcher-test',stats:{scanned:19},feedTabId:null})`);

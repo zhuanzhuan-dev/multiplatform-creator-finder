@@ -1,4 +1,6 @@
+import { captureCurrentRaw, rawCaptureEnabled } from "./raw-capture.js";
 import { contentSkipDecision } from "../lib/content-type.js";
+import { evaluateVideoRules, evaluateCreatorRules } from "../lib/rule-engine.js";
 import { sampleDwellSeconds } from "../lib/dwell.js";
 
 (function installDouyinAutomation() {
@@ -7,13 +9,12 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
   const parser = globalThis.DouyinAutoFinderParser;
   if (!parser) return;
 
-  function createLoop(settings, runId, loopId, resume = null) {
+  function createLoop(settings, rules, runId, loopId, resume = null) {
     const abort = new AbortController();
     const PAGE_CHANNEL = "DOUYIN_AUTO_FINDER_PAGE";
     let running = false;
     let activeRunId = "";
     let dwellPolicy = { mode: "fixed", fixedSeconds: 30, minSeconds: 10, typicalSeconds: 15, maxSeconds: 30 };
-    let liveDwellMs = 3_000;
     let panelRecoveryAttempts = 3;
     let failureStreak = 0;
 
@@ -100,6 +101,8 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       while (Date.now() < deadline && running) {
         const skip = observation && contentSkipDecision(observation);
         if (observation?.blockedReason || skip && skip.code !== "UNKNOWN_TYPE_SKIPPED") return observation;
+        const earlyDecision = observation && evaluateVideoRules(observation, rules);
+        if (earlyDecision && !earlyDecision.matched && !earlyDecision.needsReview && !skip) return observation;
         const hasIdentity = Boolean(observationFingerprint(observation));
         const hasCreator = Boolean(observation?.authorName || observation?.secUid || observation?.profileUrl);
         if (!skip && hasIdentity && hasCreator && hasPositiveNumber(observation?.durationSeconds) && hasFiniteNumber(observation?.likes)) {
@@ -358,6 +361,9 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           return;
         }
         if (!observation) throw new Error("当前推荐卡片尚未加载");
+        if (rawCaptureEnabled()) {
+          void captureCurrentRaw(observation).then(sample => sendRuntime({type:"DRA_RAW_SAMPLE",sample})).catch(() => undefined);
+        }
         const previousFingerprint = observationFingerprint(observation);
         const resumedDwell = resume?.phase === "dwell" && resume.videoId === previousFingerprint ? resume : null;
         if (resumedDwell && Number.isFinite(resumedDwell.cycleStartedAt)) tickStartedAt = resumedDwell.cycleStartedAt;
@@ -366,7 +372,8 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
 
         let profile = null;
         let panelRecovered = false;
-        if (!contentSkipDecision(observation)) {
+        const videoDecision = evaluateVideoRules(observation, rules);
+        if (videoDecision.matched) {
           if (!observation.authorName && !observation.secUid && !observation.profileUrl) {
             throw new Error("当前推荐卡片仍未加载达人身份");
           }
@@ -383,15 +390,17 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           }
         }
 
-        const targetDwellMs = resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : contentSkipDecision(observation) ? liveDwellMs : sampleDwellSeconds(dwellPolicy) * 1_000;
-        const waitUntil = resumedDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
-        await progress("dwell", { waitUntil, cycleStartedAt: tickStartedAt, plannedDwellSeconds: targetDwellMs / 1_000 });
+        // Only candidates that pass video and creator rules receive viewing time.
+        const shouldDwell = videoDecision.matched && evaluateCreatorRules(profile, rules).matched;
+        const targetDwellMs = shouldDwell ? (resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : sampleDwellSeconds(dwellPolicy) * 1_000) : 0;
+        const waitUntil = shouldDwell && resumedDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
+        if (shouldDwell) await progress("dwell", { waitUntil, cycleStartedAt: tickStartedAt, plannedDwellSeconds: targetDwellMs / 1_000 });
         const remainingDwellMs = Math.max(0, waitUntil - Date.now());
         if (remainingDwellMs > 0) await sleep(remainingDwellMs);
         if (!running) return;
 
         await progress("submit");
-        const refreshed = await waitForObservationHydration(parser.parseCurrentFeed(document), 2_000);
+        const refreshed = shouldDwell ? await waitForObservationHydration(parser.parseCurrentFeed(document), 2_000) : null;
         if (refreshed?.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: refreshed.blockedReason });
           running = false;
@@ -453,7 +462,6 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
     function startLoop() {
       activeRunId = runId;
       dwellPolicy = settings.dwell || dwellPolicy;
-      liveDwellMs = Math.max(1_000, Number(settings.liveDwellSeconds || 3) * 1_000);
       panelRecoveryAttempts = Math.max(1, Math.min(5, Number(settings.panelRecoveryAttempts || 3)));
       running = true;
       scheduleTick(800);
@@ -476,7 +484,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       if (!message.runId || !message.loopId) { sendResponse({ ok: false }); return false; }
       if (!loop?.status().running || loop.status().loopId !== message.loopId) {
         loop?.stop();
-        loop = createLoop(message.settings || {}, message.runId, message.loopId, message.resume);
+        loop = createLoop(message.settings || {}, message.rules || {}, message.runId, message.loopId, message.resume);
         loop.start();
       }
       sendResponse({ ok: true });

@@ -1,9 +1,10 @@
+import { sourcePlatformLabel } from "../../lib/source-platform.js";
 import { canResumeRun, elapsedRunMs } from "../../lib/run-limits.js";
 import { useState } from "react";
 import { NumberInput, inputNumber } from "../shared/NumberInput";
-import { decisionMeta, decisionsFor, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
+import { decisionMeta, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
 import { RadarDisplay } from "./RadarDisplay";
-import type { CategoryRule, CloudState, RuleSettings, RunState, SettingsDraft, Snapshot, Stats } from "./types";
+import type { CategoryRule, Decision, CloudState, RuleSettings, RunState, SettingsDraft, Snapshot, Stats } from "./types";
 
 const STATUS_LABELS: Record<string, string> = {
   idle: "未启动",
@@ -95,13 +96,13 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
   );
 }
 
-export function RecentDecisions({ state, now }: { state: RunState; now: number }) {
-  const decisions = decisionsFor(state);
+export function RecentDecisions({ now, history = [], total = 0 }: { now: number; history?: Decision[]; total?: number }) {
+  const decisions = history;
   const visibleDecisions = decisions.slice(0, COLLAPSED_DECISION_COUNT);
   const openDecisionHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
-      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">本轮 · 最近 {visibleDecisions.length} 条</span></div>
+      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">近 24 小时 · 最近 {visibleDecisions.length} 条</span></div>
       <div className="decision-list" id="recentDecisionList">
         {decisions.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : visibleDecisions.map((decision, index) => {
           const meta = decisionMeta(decision.code);
@@ -110,7 +111,7 @@ export function RecentDecisions({ state, now }: { state: RunState; now: number }
               {decision.avatarUrl ? <DecisionAvatar url={decision.avatarUrl} name={decision.accountName} /> : null}
               <div className="decision-copy">
                 <div className="decision-main"><span className="decision-name">{decision.accountName || "未识别账号"}</span><span className={`decision-label ${meta.tone}`}>{meta.label}</span></div>
-                <div className="decision-reason">{decision.reasons?.length ? decision.reasons.join(" · ") : decision.code || "已完成判断"}</div>
+                <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.reasons?.length ? decision.reasons.join(" · ") : decision.code || "已完成判断"}</div>
               </div>
               <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>
             </article>
@@ -123,7 +124,7 @@ export function RecentDecisions({ state, now }: { state: RunState; now: number }
           type="button"
           onClick={() => void openDecisionHistory()}
         >
-          查看本轮记录（{decisions.length}{decisions.length === 100 ? " · 最多保留 100 条" : ""}）
+          查看近 24 小时记录（{total}）
         </button>
       ) : null}
     </section>
@@ -139,11 +140,11 @@ function stat(stats: Stats, key: keyof Stats): number {
   return Number(stats[key] || 0);
 }
 
-export function StatsOverview({ state, now, daily }: { state: RunState; now: number; daily?: Snapshot["daily"] }) {
+export function StatsOverview({ state, now, daily, history, historyTotal }: { state: RunState; now: number; daily?: Snapshot["daily"]; history?: Decision[]; historyTotal?: number }) {
   const stats = state.stats || {};
   return (
     <section className="stats-section" aria-labelledby="statsTitle">
-      <div className="section-heading"><h2 id="statsTitle">本轮结果</h2><span className="section-meta" title="按北京时间统计，当天同一内容只计一次；保存在当前浏览器">今日已刷 <strong>{daily?.date === new Date(now + 8 * 3600000).toISOString().slice(0, 10) ? daily.scanned : 0}</strong></span></div>
+      <div className="section-heading"><h2 id="statsTitle">{state.status === "stopped" ? "本轮已结束" : "本轮结果"}</h2><span className="section-meta" title="按北京时间统计，当天同一内容只计一次；保存在当前浏览器">今日已刷 <strong>{daily?.date === new Date(now + 8 * 3600000).toISOString().slice(0, 10) ? daily.scanned : 0}</strong></span></div>
       <dl className="primary-stats">
         <div><dt title="通过初筛的内容次数，包含需人工确认和重复发现">符合条件</dt><dd><strong>{stat(stats, "matched")}</strong></dd></div>
         <div><dt>新发现账号</dt><dd><strong>{stat(stats, "newCreators")}</strong></dd></div>
@@ -164,7 +165,7 @@ export function StatsOverview({ state, now, daily }: { state: RunState; now: num
           <div><dt>账号资料读取失败</dt><dd>{stat(stats, "panelSkipped")}</dd></div>
         </dl>
       </details>
-      <RecentDecisions state={state} now={now} />
+      <RecentDecisions now={now} history={history} total={historyTotal} />
     </section>
   );
 }
@@ -184,6 +185,11 @@ export function CloudPanel({ snapshot, checking, onCheck, onConnect, onDisconnec
     <section className="cloud-panel" aria-label="研究台连接">
       <strong>{pending ? "等待研究台授权" : cloud.expired ? "请重新登录并连接" : cloud.connected ? "研究台已连接" : "登录并连接研究台"}</strong>
       <p className="field-note">{pending ? "请在已打开的研究台页面登录并确认授权，完成后这里会自动更新。" : cloud.connected ? `发现结果会自动同步到研究台，当前待同步 ${snapshot.outboxCount || 0} 条。` : "首次使用请完成登录授权，连接成功后即可开始找号。"}</p>
+      {cloud.connected && !pending ? <div className="account-identity">
+        <strong>{cloud.account?.name || cloud.account?.email || "已连接账号"}</strong>
+        {cloud.account?.name && cloud.account.email ? <span>{cloud.account.email}</span> : null}
+        {!cloud.account?.name && !cloud.account?.email ? <span>账号 ID：{cloud.userId || "暂未返回"}</span> : null}
+      </div> : null}
       <div className="bridge-actions">
         <button className={cloud.connected ? "" : "primary"} disabled={checking} onClick={onConnect}>{pending ? "重新打开授权页" : cloud.connected ? "切换账号" : cloud.expired ? "重新登录并连接" : "登录并连接研究台"}</button>
         {cloud.connected ? <button disabled={checking} onClick={onCheck}>{checking ? "检测中…" : "检测连接"}</button> : null}
@@ -235,7 +241,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
       <summary><strong>运行设置</strong><span className="summary-copy">停留、目标与定时</span></summary>
       <div className="disclosure-body">
         <section className="setting-group" aria-labelledby="dwellSettingTitle">
-          <div className="setting-heading"><strong id="dwellSettingTitle">单条停留</strong><span>控制每条视频的观看节奏</span></div>
+          <div className="setting-heading"><strong id="dwellSettingTitle">单条停留</strong><span>通过筛选的视频按此停留，淘汰内容、图文和直播快速跳过</span></div>
           <div className="segmented" aria-label="停留模式">
             <button className={draft.dwellMode === "fixed" ? "selected" : ""} disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "fixed" })}>固定时长</button>
             <button className={draft.dwellMode === "range" ? "selected" : ""} disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "range" })}>随机区间</button>

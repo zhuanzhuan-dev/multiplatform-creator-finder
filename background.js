@@ -1,3 +1,6 @@
+import { rawSamples } from "./lib/raw-sample-store.js";
+import { sanitizeRaw } from "./lib/raw-sample.js";
+import { accountProfile } from "./lib/account-profile.js";
 import { launcherState, toolbarState } from "./lib/launcher-state.js";
 import { contentSkipDecision } from "./lib/content-type.js";
 import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
@@ -15,7 +18,8 @@ import {
   shrinkRecordsToByteLimit,
 } from "./lib/cloud.js";
 import { DEFAULT_RULES, DEFAULT_SETTINGS, INITIAL_STATE, STORAGE_KEYS, TEAM_DESTINATION, mergeRules, mergeSettings, validateSettings } from "./lib/defaults.js";
-import { normalizeDecisionHistory, prependDecision } from "./lib/decision-history.js";
+import { migrateDecisionHistory, writeDecisions, cleanupDecisions, decisionPreview, queryDecisions } from "./lib/decision-store.js";
+import { normalizeSourcePlatform } from "./lib/source-platform.js";
 import { makeCreatorKey } from "./lib/normalizers.js";
 import { evaluateCreatorRules, evaluateVideoRules, scoreCreator, validateRules } from "./lib/rule-engine.js";
 import { createRunWaits, runtimeStalled, stepBudget, withTimeout } from "./lib/runtime-health.js";
@@ -46,6 +50,8 @@ let seenVideos = [];
 let creatorIndex = {};
 let outbox = [];
 let dailyStats = null;
+let pendingDecisions = [];
+let historyWrites = Promise.resolve();
 let flushInFlight = null;
 let cloudAuth = null;
 let pairing = null;
@@ -85,9 +91,12 @@ async function initialize() {
     state = {
       ...cloneInitialState(),
       ...savedState,
-      recentDecisions: normalizeDecisionHistory(savedState.recentDecisions),
       stats: { ...INITIAL_STATE.stats, ...(savedState.stats || {}) }
     };
+    await migrateDecisionHistory(saved);
+    delete state.recentDecisions;
+    await chrome.storage.local.remove(STORAGE_KEYS.decisionHistory);
+    await chrome.alarms.create("dra-history-cleanup", {periodInMinutes:5});
     if (state.status === "starting") {
       state.status = "paused";
       runWaits.cancel();
@@ -137,6 +146,22 @@ async function initialize() {
   return initialized;
 }
 
+let rawQueue = Promise.resolve();
+function requireExtensionPage(sender) {
+  if (!sender.url?.startsWith(chrome.runtime.getURL(""))) throw Error("此操作仅可从插件设置发起");
+}
+async function saveRawSample(sample, label = "unconfirmed", manual = false) {
+  const saved = await chrome.storage.local.get(STORAGE_KEYS.debugSettings);
+  if (!saved[STORAGE_KEYS.debugSettings]?.rawCapture) throw Error("请先开启原始数据采样");
+  if (!sample || typeof sample.dom !== "string") throw Error("无效的卡片采样");
+  const value = {...sanitizeRaw(sample), dom:sample.dom.slice(0,250000), label,
+    runId:manual ? "" : state.runId || "", captureMode:manual ? "manual" : "automatic", version:pluginVersion()};
+  const result = rawQueue.then(() => rawSamples("add", value));
+  rawQueue = result.catch(() => undefined);
+  try { const summary = await result; await chrome.storage.local.set({draRawSampleError:""}); return summary; }
+  catch (error) { await chrome.storage.local.set({draRawSampleError:error.message || "本地采样保存失败"}); throw error; }
+}
+
 async function updateTaskIndicators() {
   const badge = toolbarState(state);
   await Promise.all([
@@ -166,13 +191,30 @@ chrome.runtime.onConnect.addListener(port => {
   });
 });
 
+async function flushDecisionHistory() {
+  const task = historyWrites.then(async () => {
+    if (!pendingDecisions.length) return;
+    const batch = pendingDecisions.slice();
+    await writeDecisions(batch);
+    pendingDecisions.splice(0,batch.length);
+    chrome.runtime.sendMessage({type:"DRA_HISTORY_CHANGED"}).catch(() => undefined);
+  });
+  historyWrites=task.catch(() => undefined);
+  return task;
+}
+
 async function persistState(notificationTabId = state.feedTabId) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.state]: state, [STORAGE_KEYS.dailyStats]: dailyStats });
+  await flushDecisionHistory();
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.state]: state,
+    [STORAGE_KEYS.dailyStats]: dailyStats
+  });
   void updateTaskIndicators().catch(() => undefined);
   chrome.runtime.sendMessage({ type: "DRA_STATUS_CHANGED", tabId: notificationTabId, state }).catch(() => undefined);
 }
 
 async function persistWorkData() {
+  await flushDecisionHistory();
   await chrome.storage.local.set({
     [STORAGE_KEYS.state]: state,
     [STORAGE_KEYS.dailyStats]: dailyStats,
@@ -198,6 +240,10 @@ function increment(name, amount = 1) {
 
 function recordDecision(decision = {}, observation = {}, profile = null) {
   const entry = {
+    id: crypto.randomUUID(),
+    runId: state.runId || "",
+    runStartedAt: state.startedAt || "",
+    sourcePlatform: normalizeSourcePlatform(state.route?.platform || observation.sourcePlatform || observation.platform || "douyin"),
     code: String(decision.code || "UNKNOWN"),
     reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean).slice(0, 4) : [],
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
@@ -206,7 +252,7 @@ function recordDecision(decision = {}, observation = {}, profile = null) {
     occurredAt: new Date().toISOString()
   };
   state.lastDecision = entry;
-  state.recentDecisions = prependDecision(state.recentDecisions, entry);
+  pendingDecisions.push(entry);
   return entry;
 }
 
@@ -236,6 +282,7 @@ function cloudStatusSnapshot() {
     connected: Boolean(cloudAuth?.device_token) && !cloudAuth?.expired,
     expired: Boolean(cloudAuth?.expired),
     userId: cloudAuth?.user_id || "",
+    account: accountProfile(cloudAuth?.account, cloudAuth?.user_id),
     pairedAt: cloudAuth?.pairedAt || "",
     destination: CLOUD_DESTINATION,
     pairing: pairing
@@ -529,7 +576,7 @@ async function requireFeedTab(tabId, { requireActive = true, requireFocused = tr
   if (!Number.isInteger(tabId)) throw new Error("无法识别当前标签页，请重新打开侧边栏");
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !Number.isInteger(tab.id)) throw new Error("当前标签页已关闭");
-  if (!isRecommendationFeedUrl(tab.url || tab.pendingUrl || "")) {
+  if (!isRecommendationFeedUrl(tab.pendingUrl || tab.url || "")) {
     throw new Error("请在抖音推荐页打开侧边栏后启动");
   }
   if (requireActive && !tab.active) throw new Error("只能在当前活动标签页启动");
@@ -780,6 +827,7 @@ async function checkCloudConnection() {
   }
   if (!result.ok) throw new Error(result.payload?.error || `研究台检测失败：${result.status}`);
   cloudAuth.expired = false;
+  if (result.payload?.account) cloudAuth.account = accountProfile(result.payload.account, cloudAuth.user_id);
   await persistCloudAuth();
   await scheduleUpload(true);
   return { ok: true, userId: cloudAuth.user_id || "", destination: CLOUD_DESTINATION };
@@ -830,6 +878,7 @@ async function pollPairing() {
   cloudAuth = {
     device_token: result.payload.device_token,
     user_id: result.payload.user_id || "",
+    account: accountProfile(result.payload.account, result.payload.user_id),
     host_fingerprint: fingerprint,
     workbench_url: CLOUD_DESTINATION.workbenchUrl,
     pairedAt: new Date().toISOString()
@@ -1206,7 +1255,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
     await syncRunStopAlarm();
     await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
-    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId, loopId: state.loopId });
+    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId });
     const runtimeStatus = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 2).catch(() => null);
     if (runtimeStatus) await applyPageRuntimeState(runtimeStatus);
     await persistState();
@@ -1220,7 +1269,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   }
 }
 
-async function resumeRun() {
+async function resumeRun({ windowId } = {}) {
   await initialize();
   if (!canResumeRun(state)) throw new Error("本轮已结束或达到目标，请开始新一轮");
   const runId = state.runId;
@@ -1232,8 +1281,7 @@ async function resumeRun() {
     await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
   }
   if (state.runId !== runId || state.status !== "paused") throw new Error("任务状态已变化，请重试");
-  let tab = await requireFeedTab(state.feedTabId, { requireActive: false, requireFocused: false });
-  if (state.runId !== runId || state.status !== "paused") throw new Error("任务状态已变化，请重试");
+  const previousFeedTabId = state.feedTabId;
   const elapsedMs = elapsedRunMs(state);
   const pausedAt = state.pausedAt || Date.parse(state.endedAt || "") || Date.now();
   const previousRuntime = state.runtime;
@@ -1244,13 +1292,48 @@ async function resumeRun() {
   state.activeSince = null;
   await persistState();
   try {
+    const stillResuming = () => state.runId === runId && state.status === "starting";
+    let tab = await requireFeedTab(previousFeedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
+    if (!stillResuming()) return state;
+    const samePage = Boolean(tab);
+    if (!tab) {
+      // Release a page the user navigated to, including ownership used by Stop.
+      state.feedTabId = null;
+      state.createdByExtension = false;
+      await detachDebugger(previousFeedTabId);
+      if (!stillResuming()) return state;
+      const preferredWindowId = Number.isInteger(windowId) ? windowId : state.feedWindowId;
+      const destinationWindow = Number.isInteger(preferredWindowId)
+        ? await chrome.windows.get(preferredWindowId).catch(() => null) : null;
+      const targetWindowId = destinationWindow?.id ?? (await chrome.windows.getCurrent()).id;
+      if (!stillResuming()) return state;
+      const selected = await findOrCreateFeedTab({ windowId: targetWindowId });
+      if (!stillResuming()) {
+        if (selected.createdByExtension) await chrome.tabs.remove(selected.tab.id).catch(() => undefined);
+        return state;
+      }
+      tab = selected.tab;
+      state.feedTabId = tab.id;
+      state.feedWindowId = tab.windowId;
+      state.createdByExtension = selected.createdByExtension;
+    }
+    if (!stillResuming()) return state;
+    state.startupStage = samePage ? "正在恢复本轮任务" : "正在连接推荐页，保留本轮进度";
+    state.backgroundMode = state.runTrigger === "schedule" ? "scheduled-tab" : "current-tab";
+    await persistState();
     tab = await waitForTabComplete(tab.id);
+    if (!stillResuming()) return state;
+    tab = await requireFeedTab(tab.id, { requireActive: false, requireFocused: false });
     tab = await ensureContentRuntime(tab);
+    if (!stillResuming()) return state;
+    tab = await requireFeedTab(tab.id, { requireActive: false, requireFocused: false });
     await keepFeedPageActive(tab.id);
-    if (state.runId !== runId || state.status !== "starting") return state;
+    if (!stillResuming()) return state;
+    await applyPageRuntimeState({ url: tab.url, hasFocus: tab.active });
+    if (!stillResuming()) return state;
     const now = Date.now();
     const shift = Math.max(0, now - pausedAt);
-    const resume = previousRuntime?.phase === "dwell" ? {
+    const resume = samePage && previousRuntime?.phase === "dwell" ? {
       ...previousRuntime,
       waitUntil: previousRuntime.waitUntil + shift,
       deadlineAt: previousRuntime.deadlineAt + shift,
@@ -1270,7 +1353,7 @@ async function resumeRun() {
     await syncRunStopAlarm();
     await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
     await persistState();
-    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId, loopId: state.loopId, resume });
+    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId, resume });
     await scheduleUpload(true);
     return state;
   } catch (error) {
@@ -1328,7 +1411,7 @@ async function restartContentLoop(tab, reason) {
   await sendTabMessage(tab.id, { type: "DRA_STOP_LOOP", loopId: oldLoopId }, 1).catch(() => undefined);
   await keepFeedPageActive(tab.id);
   if (state.status !== "running" || state.runId !== runId) return;
-  await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, runId, loopId: state.loopId, resume }, 2);
+  await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId, resume }, 2);
 }
 
 function watchdog() {
@@ -1420,6 +1503,9 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "dra-history-cleanup") {
+    initialize().then(()=>cleanupDecisions()).then(()=>chrome.runtime.sendMessage({type:"DRA_HISTORY_CHANGED"})).catch(()=>undefined);
+  }
   if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
   if (alarm.name === RUN_STOP_ALARM) handleRunStopAlarm().catch((error) => setPaused("到点停止任务失败", error.message));
@@ -1529,12 +1615,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await persistState();
         return { ok: true };
       }
+      case "DRA_RAW_SAMPLE":
+        requireBoundContentTab(sender, message);
+        return {ok:true, samples:await saveRawSample(message.sample)};
+      case "DRA_DEBUG_STATUS": {
+        requireExtensionPage(sender);
+        const saved = await chrome.storage.local.get([STORAGE_KEYS.debugSettings,"draRawSampleError"]);
+        return {ok:true, enabled:saved[STORAGE_KEYS.debugSettings]?.rawCapture===true, error:saved.draRawSampleError || "", samples:await rawSamples("status")};
+      }
+      case "DRA_SET_RAW_CAPTURE":
+        requireExtensionPage(sender);
+        await chrome.storage.local.set({[STORAGE_KEYS.debugSettings]:{rawCapture:message.enabled===true},draRawSampleError:""});
+        return {ok:true};
+      case "DRA_CAPTURE_RAW": {
+        requireExtensionPage(sender);
+        const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
+        if (!tab?.url?.startsWith("https://www.douyin.com/")) throw Error("请切换到抖音推荐页后采样");
+        const result = await chrome.tabs.sendMessage(tab.id,{type:"DRA_CAPTURE_SAMPLE"});
+        if (!result?.ok) throw Error(result?.error || "采样失败，请刷新抖音页面后重试");
+        const label = ["video","live","photo","ad"].includes(message.label) ? message.label : "unconfirmed";
+        return {ok:true,samples:await saveRawSample(result.sample,label,true)};
+      }
+      case "DRA_EXPORT_RAW":
+        requireExtensionPage(sender);
+        return {ok:true,samples:await rawQueue.then(()=>rawSamples("list"))};
+      case "DRA_CLEAR_RAW": {
+        requireExtensionPage(sender);
+        const task=rawQueue.then(()=>rawSamples("clear")); rawQueue=task.catch(()=>undefined);
+        return {ok:true,samples:await task};
+      }
       case "DRA_GET_LAUNCHER":
         return { ok:true, launcher: launcherState(state, Boolean(panelPorts.get(sender.tab?.windowId)?.size)) };
-      case "DRA_GET_STATUS":
+      case "DRA_QUERY_HISTORY":
+        requireExtensionPage(sender);
+        await flushDecisionHistory();
+        return {ok:true,...await queryDecisions(message.options || {})};
+      case "DRA_GET_STATUS": {
+        await flushDecisionHistory();
+        const history = await decisionPreview();
         return {
           ok: true,
-          state: await stateSnapshotForTab(message.global ? state.feedTabId : message.tabId),
+          state: message.global ? state : await stateSnapshotForTab(message.tabId),
+          decisionHistory: history.items,
+          decisionHistoryTotal: history.total,
           settings,
           settingsDraft,
           rules,
@@ -1546,6 +1669,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           outboxCount: uploadableOutbox().length,
           outbox: outbox.slice(-20).reverse()
         };
+      }
       case "DRA_CHECK_BRIDGE":
       case "DRA_CHECK_CLOUD": {
         const health = await checkCloudConnection();
@@ -1567,7 +1691,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_START":
         return { ok: true, state: await startRun({ tabId: message.tabId }) };
       case "DRA_RESUME":
-        return { ok: true, state: await resumeRun() };
+        return { ok: true, state: await resumeRun({ windowId: message.windowId }) };
       case "DRA_PAUSE":
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
         await setPaused("用户暂停");

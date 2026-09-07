@@ -12,7 +12,7 @@ async function getPanelTab() {
   const [tab] = await chrome.tabs.query({ active: true, windowId: currentWindow.id });
   const tabId = tab?.id;
   if (!Number.isInteger(tabId)) throw new Error("无法识别当前标签页");
-  return { id: tabId as number, url: tab.url || tab.pendingUrl || "" };
+  return { id: tabId as number, windowId: currentWindow.id, url: tab.url || tab.pendingUrl || "" };
 }
 
 export function useExtensionState() {
@@ -140,13 +140,15 @@ export function useExtensionState() {
         await sendRuntime({ type: "DRA_START", tabId: tab.id });
       } else if (action === "resume") {
         show("正在恢复本轮，保留已有计数与记录…");
-        await sendRuntime({ type: "DRA_RESUME" });
+        const tab = await getPanelTab();
+        await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId });
       } else if (action === "pause") {
         await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId });
       } else {
         await sendRuntime({ type: "DRA_STOP", tabId: snapshot?.state?.feedTabId });
       }
       await refresh();
+      show("");
     } catch (error) {
       show(error instanceof Error ? error.message : String(error), true);
       await refresh().catch(() => undefined);
@@ -204,7 +206,8 @@ export function useExtensionState() {
       if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    const timer = setInterval(onVisible, 60_000);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [refresh]);
 
   useEffect(() => {

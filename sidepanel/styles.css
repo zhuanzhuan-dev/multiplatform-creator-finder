@@ -274,3 +274,11 @@ button.icon-button { display: grid; place-items: center; width: 2.75rem; height:
 
 .run-health { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .run-health > span:last-child { min-width: 0; overflow-wrap: anywhere; flex: 1 1 8rem; }
+
+.account-identity { display:grid; gap:4px; padding:10px 0; overflow-wrap:anywhere; }
+.account-identity span { font-size:12px; color:var(--muted); }
+.raw-capture-settings { display:grid; gap:.5rem; padding-top:.75rem; margin-top:.75rem; border-top:1px solid var(--line-soft); }
+.raw-capture-settings .field { display:grid; gap:.375rem; }
+.raw-capture-settings .field-note { margin:0; }
+.raw-capture-settings select { max-width:100%; min-width:0; }
+.decision-source { color:var(--quiet); }

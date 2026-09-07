@@ -71,6 +71,7 @@ if(process.env.LIVE_PROBE==='1'){
 const initial=await request({type:'DRA_GET_STATUS',tabId:feedTabId});
 const configured=await request({type:'DRA_SAVE_CONFIG',settings:{...initial.settings,dryRun:true,cloud:{enabled:false},markRejectedNotInterested:false,dwell:{mode:'fixed',fixedSeconds:5},target:{mode:'time',durationMinutes:Math.ceil(minutes+5),maxItems:10000},schedule:{...initial.settings.schedule,enabled:process.env.LIVE_RUN==='1'}},rules:initial.rules});
 assert.equal(configured.ok,true,JSON.stringify(configured));
+if(process.env.RAW_CAPTURE==='1') assert.equal((await request({type:'DRA_SET_RAW_CAPTURE',enabled:true})).ok,true);
 if(process.env.LIVE_RUN==='1'){
  await api(`chrome.alarms.create('dra-schedule-next',{when:Date.now()+200})`);
  let saved;
@@ -118,11 +119,11 @@ try{
  report.scenarios.push('steady-background-timing');
  }
  const stopped=await request({type:'DRA_PAUSE',tabId:feedTabId});assert.equal(stopped.ok,true);
- const pausedSnapshot=await state();const pausedCount=pausedSnapshot.stats.scanned;
+ const pausedSnapshot=await state();const pausedCount=pausedSnapshot.stats.scanned;const pausedHistory=(await request({type:"DRA_GET_STATUS",global:true})).decisionHistoryTotal;
  await delay(6000);assert.equal((await state()).stats.scanned,pausedCount);report.scenarios.push('pause-cancels-work');
  const resumed=await request({type:'DRA_RESUME'});assert.equal(resumed.ok,true,JSON.stringify(resumed));
  assert.equal(resumed.state.runId,pausedSnapshot.runId);assert.equal(resumed.state.startedAt,pausedSnapshot.startedAt);
- assert.equal(resumed.state.stats.scanned,pausedCount);assert.equal(resumed.state.recentDecisions.length,pausedSnapshot.recentDecisions.length);
+ assert.equal(resumed.state.stats.scanned,pausedCount);assert.equal((await request({type:"DRA_GET_STATUS",global:true})).decisionHistoryTotal,pausedHistory);
  assert.ok(resumed.state.stopAt-pausedSnapshot.stopAt>=6000,'paused interval is excluded from target');
  await delay(1000);await request({type:'DRA_PAUSE',tabId:feedTabId});
  const pausedAgain=await state();assert.ok(pausedAgain.elapsedMs-pausedSnapshot.elapsedMs<5000,'paused wall time excluded from active duration');
@@ -197,6 +198,13 @@ try{
  assert.ok(report.stopDelayMs>=0&&report.stopDelayMs<5000,`stop delay ${report.stopDelayMs}`);
  report.scenarios.push('time-target-stops-during-long-dwell');
  console.log(JSON.stringify({scenario:'timed-stop',passed:true,delay:report.stopDelayMs}));
+ }
+ if(process.env.RAW_CAPTURE==='1') {
+  const samples=await request({type:'DRA_EXPORT_RAW'});
+  assert.ok(samples.samples.length>0,'automatic samples recorded during actual runtime');
+  assert.ok(samples.samples.every(s=>s.label==='unconfirmed'&&s.dom.includes('feed-item')));
+  report.rawSampleCount=samples.samples.length;
+  report.scenarios.push('automatic-local-raw-capture-with-background-runtime');
  }
  report.passed=true;
 }catch(error){report.error=String(error);console.error(error);process.exitCode=1;}

@@ -30,3 +30,8 @@ test("selects a recommendation tab only from the requested window", () => {
   assert.equal(firstRunnableTabInWindow(tabs, 7)?.id, 3);
   assert.equal(firstRunnableTabInWindow(tabs, 9), null);
 });
+
+test("skips recommendation tabs that are navigating away", () => {
+  const tabs = [{ id: 1, windowId: 7, url: DOUYIN_RECOMMEND_URL, pendingUrl: "https://www.douyin.com/" }];
+  assert.equal(firstRunnableTabInWindow(tabs, 7), null);
+});

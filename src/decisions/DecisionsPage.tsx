@@ -1,108 +1,76 @@
-import { useEffect, useMemo, useState } from "react";
-import { decisionMeta, decisionsFor, formatLocalDateTime } from "../sidepanel/format";
-import type { Decision, RunState } from "../sidepanel/types";
+import { useEffect, useRef, useState } from 'react';
+import { decisionMeta, formatLocalDateTime } from '../sidepanel/format';
+import type { Decision } from '../sidepanel/types';
+import { sendRuntime } from '../shared/chrome-runtime';
+import { SOURCE_PLATFORMS, sourcePlatformLabel } from '../../lib/source-platform.js';
 
-const STATE_KEY = "draState";
-type Filter = "all" | "good" | "review" | "reject";
-
-function matchesQuery(decision: Decision, query: string): boolean {
-  if (!query) return true;
-  return [decision.accountName, decision.code, ...(decision.reasons || [])]
-    .filter(Boolean)
-    .join(" ")
-    .toLocaleLowerCase("zh-CN")
-    .includes(query);
+type Cursor = {at:number;id:string} | null;
+interface HistoryResponse {
+  ok:boolean; items:Decision[]; total:number; counts:{good:number;review:number;reject:number};
+  runs:{id:string;startedAt:string}[]; nextCursor:Cursor; asOf:number;
 }
-
-function DecisionAvatar({ decision }: { decision: Decision }) {
-  const [failed, setFailed] = useState(false);
-  const initial = (decision.accountName || "?").trim().slice(0, 1).toUpperCase();
-  if (!decision.avatarUrl || failed) return <span className="avatar-fallback" aria-hidden="true">{initial}</span>;
-  return <img src={decision.avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+function DecisionAvatar({decision}:{decision:Decision}) {
+  const [failed,setFailed]=useState(false);
+  if (!decision.avatarUrl || failed) return <span className="avatar-fallback" aria-hidden="true">{(decision.accountName || '?').slice(0,1)}</span>;
+  return <img src={decision.avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFailed(true)} />;
 }
-
 export function DecisionsPage() {
-  const [state, setState] = useState<RunState | null>(null);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
-
-  useEffect(() => {
-    let active = true;
-    void chrome.storage.local.get(STATE_KEY).then((stored) => {
-      if (active) setState((stored[STATE_KEY] || {}) as RunState);
-    });
-    const handleChange = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
-      if (areaName === "local" && changes[STATE_KEY]?.newValue) setState(changes[STATE_KEY].newValue as RunState);
-    };
-    chrome.storage.onChanged.addListener(handleChange);
-    return () => {
-      active = false;
-      chrome.storage.onChanged.removeListener(handleChange);
-    };
-  }, []);
-
-  const decisions = useMemo(() => decisionsFor(state || {}), [state]);
-  const counts = useMemo(() => decisions.reduce((result, decision) => {
-    result[decisionMeta(decision.code).tone as Exclude<Filter, "all">] += 1;
-    return result;
-  }, { good: 0, review: 0, reject: 0 }), [decisions]);
-  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
-  const visible = useMemo(() => decisions.filter((decision) => {
-    const tone = decisionMeta(decision.code).tone;
-    return (filter === "all" || tone === filter) && matchesQuery(decision, normalizedQuery);
-  }), [decisions, filter, normalizedQuery]);
-
-  return (
-    <main>
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">DISCOVERY / DECISION LOG</p>
-          <h1>本轮判断记录</h1>
-          <p className="subtitle">保留本轮最近 100 条记录；刷新后保留，开始新一轮时重置。</p>
-        </div>
-        <span className={`run-status ${state?.status || "idle"}`}>{state?.status === "running" ? "实时更新中" : "本轮记录"}</span>
-      </header>
-
-      <section className="decision-rail" aria-label="判断结果汇总">
-        <button className={filter === "all" ? "selected" : ""} onClick={() => setFilter("all")}><span>全部判断</span><strong>{decisions.length}</strong></button>
-        <button className={`good ${filter === "good" ? "selected" : ""}`} onClick={() => setFilter("good")}><span>符合条件</span><strong>{counts.good}</strong></button>
-        <button className={`review ${filter === "review" ? "selected" : ""}`} onClick={() => setFilter("review")}><span>需人工确认</span><strong>{counts.review}</strong></button>
-        <button className={`reject ${filter === "reject" ? "selected" : ""}`} onClick={() => setFilter("reject")}><span>淘汰与跳过</span><strong>{counts.reject}</strong></button>
-      </section>
-
-      <section className="ledger" aria-labelledby="ledgerTitle">
-        <div className="ledger-toolbar">
-          <div><h2 id="ledgerTitle">判断台账</h2><span>当前显示 {visible.length} 条</span></div>
-          <label>
-            <span className="visually-hidden">搜索账号或原因</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、结果或原因" type="search" />
-          </label>
-        </div>
-
-        {state === null ? <p className="empty-state">正在读取判断记录…</p> : visible.length === 0 ? (
-          <p className="empty-state">没有符合当前筛选条件的记录。</p>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>时间</th><th>账号</th><th>判断结果</th><th>判断依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
-              <tbody>
-                {visible.map((decision, index) => {
-                  const meta = decisionMeta(decision.code);
-                  return (
-                    <tr key={`${decision.occurredAt || "decision"}-${index}`}>
-                      <td data-label="时间"><time dateTime={decision.occurredAt || ""}>{formatLocalDateTime(decision.occurredAt)}</time></td>
-                      <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><strong>{decision.accountName || "未识别账号"}</strong></span></td>
-                      <td data-label="判断结果"><span className={`decision-badge ${meta.tone}`}>{meta.label}</span></td>
-                      <td data-label="判断依据" className="reason">{decision.reasons?.length ? decision.reasons.join(" · ") : decision.code || "已完成判断"}</td>
-                      <td className="row-action">{decision.profileUrl ? <a href={decision.profileUrl} target="_blank" rel="noreferrer">查看主页 ↗</a> : <span>—</span>}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </main>
-  );
+  const [data,setData]=useState<HistoryResponse|null>(null);
+  const [filters,setFilters]=useState({sourcePlatform:'',runId:'',query:'',tone:''});
+  const [page,setPage]=useState<{cursor:Cursor;previous:Cursor[];asOf?:number}>({cursor:null,previous:[]});
+  const [revision,setRevision]=useState(0);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const sequence=useRef(0);
+  useEffect(()=>{
+    const refresh=()=>{if(document.visibilityState==='visible')setRevision(r=>r+1);};
+    const listener=(message:{type?:string})=>{if(message.type==='DRA_HISTORY_CHANGED')refresh();};
+    chrome.runtime.onMessage.addListener(listener);
+    document.addEventListener('visibilitychange',refresh);
+    const timer=setInterval(refresh,60_000);
+    return ()=>{clearInterval(timer);chrome.runtime.onMessage.removeListener(listener);document.removeEventListener('visibilitychange',refresh);};
+  },[]);
+  useEffect(()=>{
+    const id=++sequence.current;setBusy(true);setError('');
+    const timer=setTimeout(()=>{
+      void sendRuntime<HistoryResponse>({type:'DRA_QUERY_HISTORY',options:{...filters,cursor:page.cursor,asOf:page.asOf}})
+        .then(result=>{if(id===sequence.current)setData(result);})
+        .catch(e=>{if(id===sequence.current)setError(e.message);})
+        .finally(()=>{if(id===sequence.current)setBusy(false);});
+    },150);
+    return ()=>{clearTimeout(timer);sequence.current++;};
+  },[filters,page,revision]);
+  const change=(patch:Partial<typeof filters>)=>{setFilters(f=>({...f,...patch}));setPage({cursor:null,previous:[]});};
+  const counts=data?.counts || {good:0,review:0,reject:0};
+  const visible=data?.items || [];
+  return <main>
+    <header className="page-header"><div><p className="eyebrow">DISCOVERY / HISTORY</p><h1>近 24 小时记录</h1><p className="subtitle">从当前时间往前推 24 小时，跨轮次保留；每页 50 条，到期自动清理。</p></div><span className="run-status">本机历史</span></header>
+    <section className="decision-rail" aria-label="处理结果汇总">
+      {[['','全部记录',counts.good+counts.review+counts.reject],['good','符合条件',counts.good],['review','需人工确认',counts.review],['reject','淘汰与跳过',counts.reject]].map(([tone,label,count])=><button key={tone} className={`${tone} ${filters.tone===tone?'selected':''}`} onClick={()=>change({tone:String(tone)})}><span>{label}</span><strong>{count}</strong></button>)}
+    </section>
+    <section className="ledger" aria-labelledby="ledgerTitle" aria-busy={busy}>
+      <div className="ledger-toolbar"><div><h2 id="ledgerTitle">处理记录</h2><span>{busy?'读取中…':`匹配 ${data?.total || 0} 条`}</span></div>
+        <label>平台来源<select aria-label="筛选平台来源" value={filters.sourcePlatform} onChange={e=>change({sourcePlatform:e.target.value,runId:''})}><option value="">全部来源</option>{Object.entries(SOURCE_PLATFORMS).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+        <label>轮次<select aria-label="筛选轮次" value={filters.runId} onChange={e=>change({runId:e.target.value})}><option value="">全部轮次</option>{data?.runs.map(run=><option key={run.id} value={run.id}>{formatLocalDateTime(run.startedAt)}</option>)}</select></label>
+        <label><span className="visually-hidden">搜索账号或原因</span><input type="search" value={filters.query} placeholder="搜索账号、结果或原因" onChange={e=>change({query:e.target.value})} /></label>
+      </div>
+      {error?<p className="empty-state" role="alert">{error}<button onClick={()=>setRevision(r=>r+1)}>重试</button></p>:!data?<p className="empty-state">正在读取记录…</p>:visible.length===0?<p className="empty-state">近 24 小时内没有符合条件的记录。</p>:<div className="table-scroll"><table>
+        <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
+        <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
+          <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
+          <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
+          <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><strong>{decision.accountName || '未识别账号'}</strong></span></td>
+          <td data-label="处理结果"><span className={`decision-badge ${meta.tone}`}>{meta.label}</span></td>
+          <td data-label="处理依据" className="reason">{decision.reasons?.join(' · ') || decision.code}</td>
+          <td className="row-action">{decision.profileUrl?<a href={decision.profileUrl} target="_blank" rel="noreferrer">查看主页 ↗</a>:<span>—</span>}</td>
+        </tr>;})}</tbody>
+      </table></div>}
+      <nav className="history-pagination" aria-label="记录分页">
+        <button disabled={busy||!page.previous.length} onClick={()=>setPage(p=>({cursor:p.previous.at(-1) || null,previous:p.previous.slice(0,-1),asOf:p.previous.length>1?p.asOf:undefined}))}>上一页</button>
+        <span>第 {page.previous.length+1} 页</span>
+        <button disabled={busy||!data?.nextCursor} onClick={()=>{if(data?.nextCursor)setPage(p=>({cursor:data.nextCursor,previous:[...p.previous,p.cursor],asOf:data.asOf}));}}>下一页</button>
+        <button disabled={busy} onClick={()=>{setPage({cursor:null,previous:[]});setRevision(r=>r+1);}}>刷新最新</button>
+      </nav>
+    </section>
+  </main>;
 }

@@ -29,9 +29,9 @@ for(let i=0;i<50&&!extensionId;i++){
  const {targetInfos}=await cmd('Target.getTargets');
  for(const worker of targetInfos.filter(t=>t.type==='service_worker'&&t.url.startsWith('chrome-extension://')&&t.url.endsWith('/background.js'))){
   const candidate=await attach(worker.targetId);
-  const manifest=await evaluate(candidate,'chrome.runtime.getManifest()');
+  const manifest=await evaluate(candidate,'globalThis.chrome?.runtime?.getManifest?.()');
   await cmd('Target.detachFromTarget',{sessionId:candidate});
-  if(manifest.name==='多平台自动找号助手'){extensionId=new URL(worker.url).host;break;}
+  if(manifest?.name==='多平台自动找号助手'){extensionId=new URL(worker.url).host;break;}
  }
  if(!extensionId)await delay(200);
 }
@@ -76,7 +76,7 @@ try{
   window.fixtureCloud={connected:false};window.fixturePairStarts=0;window.fixtureStatus='paused';
   window.fixtureDecisions=Array.from({length:7},(_,i)=>({accountName:'示例创作者 '+(i+1),code:i===1?'ACCEPTED_REVIEW':'ACCEPTED',reasons:['美食内容 · 点赞 5000 · 粉丝 10 万'],occurredAt:new Date().toISOString()}));
   chrome.runtime.sendMessage=(m,cb)=>{
-    if(m.type==='DRA_GET_STATUS')return send(m,r=>cb({...r,cloud:window.fixtureCloud,daily:{date:new Date(Date.now()+8*3600000).toISOString().slice(0,10),scanned:168},state:{...r.state,status:window.fixtureStatus,runId:'fixture-run',startedAt:new Date(Date.now()-180000).toISOString(),elapsedMs:60000,activeSince:null,runTarget:{mode:'time',durationMinutes:60},stats:{scanned:40,matched:18,newCreators:11,reviewQueued:3,uploaded:38,duplicates:7,notInterested:22,liveSkipped:2,photoSkipped:3,adSkipped:1,unknownSkipped:1},recentDecisions:window.fixtureDecisions}}));
+    if(m.type==='DRA_GET_STATUS')return send(m,r=>cb({...r,cloud:window.fixtureCloud,decisionHistory:window.fixtureDecisions.slice(0,5),decisionHistoryTotal:window.fixtureDecisions.length,daily:{date:new Date(Date.now()+8*3600000).toISOString().slice(0,10),scanned:168},state:{...r.state,status:window.fixtureStatus,runId:'fixture-run',startedAt:new Date(Date.now()-180000).toISOString(),elapsedMs:60000,activeSince:null,runTarget:{mode:'time',durationMinutes:60},stats:{scanned:40,matched:18,newCreators:11,reviewQueued:3,uploaded:38,duplicates:7,notInterested:22,liveSkipped:2,photoSkipped:3,adSkipped:1,unknownSkipped:1},recentDecisions:window.fixtureDecisions}}));
     if(m.type==='DRA_RESUME'){window.fixtureStatus='running';return cb({ok:true});}
     if(m.type==='DRA_PAUSE'){window.fixtureStatus='paused';return cb({ok:true});}
     if(m.type==='DRA_START_PAIR'){window.fixturePairStarts++;window.fixtureCloud={connected:false,pairing:{status:'pending',code:'fixture'}};return cb({ok:true,cloud:window.fixtureCloud});}
@@ -93,11 +93,13 @@ try{
  await api(`document.querySelector('main > .cloud-panel .primary').click()`);
  await waitFor(()=>api(`document.querySelector('main > .cloud-panel').textContent.includes('等待研究台授权')`),'pairing');
  assert.equal(await api('window.fixturePairStarts'),1);
- await api(`window.fixtureCloud={connected:true};document.dispatchEvent(new Event('visibilitychange'))`);
+ await api(`window.fixtureCloud={connected:true,userId:'fixture-user',account:{id:'fixture-user',name:'张三',email:'one@example.com'}};document.dispatchEvent(new Event('visibilitychange'))`);
  await waitFor(()=>api(`!!document.querySelector('.connection-summary')`),'connected compact');
  assert.equal(await api(`!!document.querySelector('main > .cloud-panel')`),false);
  assert.equal(await api(`document.querySelector('.run-card .primary').disabled`),false);
  assert.ok(await api(`document.querySelector('#preferencesPopover .cloud-panel').textContent.includes('切换账号')`));
+ assert.ok(await api(`document.querySelector('.account-identity').textContent.includes('one@example.com')`));
+ assert.ok(await api(`document.querySelector('.decision-section .section-meta').textContent.includes('24 小时')`));
  assert.equal(await api(`!!document.querySelector('.app-header .badge')`),false);
  assert.equal(await api(`document.querySelector('.run-card .badge').textContent`),'已暂停');
  assert.equal(await api(`document.querySelector('.run-card .primary').textContent`),'继续本轮');

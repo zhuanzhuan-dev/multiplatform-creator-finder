@@ -67,7 +67,7 @@ export function isRunnableRoute(input: string | URL): boolean {
 }
 
 export function firstRunnableTabInWindow<T extends TabRouteCandidate>(tabs: readonly T[], windowId: number): T | null {
-  return tabs.find((tab) => tab.windowId === windowId && isRunnableRoute(tab.url || tab.pendingUrl || "")) || null;
+  return tabs.find((tab) => tab.windowId === windowId && isRunnableRoute(tab.pendingUrl || tab.url || "")) || null;
 }
 
 export function launchUrl(platform: PlatformId, surface: SurfaceId): string {

@@ -1,5 +1,3 @@
-import type { Decision } from "./types";
-
 export function formatLocalDateTime(value?: string): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -44,9 +42,4 @@ export function decisionMeta(code = ""): { label: string; tone: string } {
     return { label: "未符合条件", tone: "reject" };
   }
   return { label: "已处理", tone: "reject" };
-}
-
-export function decisionsFor(state: { recentDecisions?: Decision[]; lastDecision?: Decision | null }): Decision[] {
-  if (state.recentDecisions?.length) return state.recentDecisions;
-  return state.lastDecision ? [state.lastDecision] : [];
 }
