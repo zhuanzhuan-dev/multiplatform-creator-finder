@@ -19,7 +19,7 @@ cat <<'EOF'
 请按「同事安装说明.md」操作：
 1. Chrome 加载 dist 文件夹作为未打包扩展
 2. 打开侧栏，点击「连接研究台」
-3. 在 https://whislte.cc.cd 登录并确认配对
+3. 在 https://fai.zhuanspirit.com/creators 登录并确认配对
 
 EOF
 

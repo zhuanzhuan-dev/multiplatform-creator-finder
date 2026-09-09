@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "多平台自动找号助手",
-  "version": "1.0.20",
-  "version_name": "1.0.20",
+  "version": "1.0.21",
+  "version_name": "1.0.21",
   "description": "从多平台内容流中自动发现符合规则的达人和视频，并将观察结果上传到研究台。",
   "minimum_chrome_version": "120",
   "icons": {
@@ -22,7 +22,7 @@
   "host_permissions": [
     "https://www.douyin.com/*",
     "https://kigrzhmcphrkqtuqthwb.supabase.co/*",
-    "https://whislte.cc.cd/*",
+    "https://fai.zhuanspirit.com/*",
     "http://127.0.0.1:4173/*"
   ],
   "background": {

@@ -870,6 +870,8 @@ async function checkCloudConnection() {
 
 async function startPairing() {
   if (pairing?.status === "pending" && Date.parse(pairing.expiresAt) > Date.now()) {
+    pairing = { ...pairing, pairUrl: pairUrlFor(pairing.code) };
+    await persistCloudAuth();
     await chrome.tabs.create({ url: pairing.pairUrl, active: true });
     return cloudStatusSnapshot();
   }

@@ -98,7 +98,7 @@ try {
  await button('应用随机预设');
  await waitFor(async()=>{const s=await stored();return s.draSettings.dwell.typicalSeconds===20&&s.draSettingsDraft===null;},'preset applied');
  await button('打开工作台');
- const workbench=await waitFor(async()=>(await cmd('Target.getTargets')).targetInfos.find(t=>t.url.startsWith('https://whislte.cc.cd')),'workbench tab');
+ const workbench=await waitFor(async()=>(await cmd('Target.getTargets')).targetInfos.find(t=>t.url.startsWith('https://fai.zhuanspirit.com/creators')),'workbench tab');
  await cmd('Target.closeTarget',{targetId:workbench.targetId});
  report.scenarios.push('workbench-button-opens-configured-url');
  // Suppress scheduled runs in this isolated browser while testing reload.
