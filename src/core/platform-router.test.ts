@@ -41,3 +41,10 @@ test('runs only the implemented Feigua video library route', () => {
   assert.equal(isRunnableRoute('https://dy.feigua.cn/app/#/video/library/all?keyword=food'), true);
   for (const url of ['https://dy.feigua.cn/app/#/workbench/index', 'https://dy.feigua.cn/app/#/blogger-detail/index?bloggerId=42', 'https://dy.feigua.cn/app/#/video/library/all-other', 'https://www.feigua.cn/', 'http://dy.feigua.cn/app/#/video/library/all', 'https://dy.feigua.cn.evil.test/app/#/video/library/all']) assert.equal(isRunnableRoute(url), false, url);
 });
+
+test('Kuaishou recommendation is runnable; profiles and discovery stay read-only',()=>{
+  assert.equal(launchUrl('kuaishou','recommend'),'https://www.kuaishou.com/new-reco');
+  assert.equal(resolveRoute('https://www.kuaishou.com/new-reco?source=PROFILE')?.runnable,true);
+  assert.equal(resolveRoute('https://www.kuaishou.com/profile/abc')?.runnable,false);
+  assert.equal(resolveRoute('https://www.kuaishou.com/')?.runnable,false);
+});

@@ -15,6 +15,9 @@ function extensionRuntime(): Plugin {
     "page/page-bridge.js",
     "content/douyin-content.js",
     "content/feigua-content.js",
+    "content/kuaishou-content.js",
+    "lib/kuaishou-page.js",
+    "lib/kuaishou-task.js",
     "content/floating-launcher.js",
     "lib/launcher-position.js",
     "content/feigua-page.js",
@@ -33,6 +36,7 @@ function extensionRuntime(): Plugin {
     },
     async closeBundle() {
       await Promise.all([
+        esbuild({entryPoints:[resolve(root,"content/kuaishou-content.js")],outfile:resolve(outputDirectory,"content/kuaishou-content.js"),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"}),
         esbuild({
           entryPoints: [resolve(root, "content/floating-launcher.js")],
           outfile: resolve(outputDirectory, "content/floating-launcher.js"),

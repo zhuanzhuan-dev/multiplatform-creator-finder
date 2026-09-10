@@ -7,3 +7,5 @@
 - feigua.ico： https://dy.feigua.cn/favicon.ico ，官网 16 × 16 备用图标。
 
 品牌资源用于标识对应平台，权利归原品牌方。
+
+- 快手：推荐页声明的官方 favicon https://p66-plat.wskwai.com/udata/pkg/WEB-LIVE/kwai_icon.8f6787d8.ico ，保存为 `kuaishou.ico`，32×32。

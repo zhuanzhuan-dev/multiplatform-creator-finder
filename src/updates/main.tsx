@@ -18,22 +18,17 @@ function UpdatePage() {
           <h1>已更新至 V{visibleVersion}</h1>
         </div>
       </header>
-      <p className="lead">飞瓜采集与抖音独立运行，本地观察默认保留 24 小时，等待上传的数据继续保留。</p>
+      <p className="lead">新增快手推荐流采集，多平台独立运行，悬浮入口清晰展示各平台进度。</p>
       <section>
         <h2>本次更新</h2>
         <ul>
-          <li><strong>飞瓜后台继续</strong><span>继续采集时后台恢复原标签页，页面关闭时后台新建，保持当前页面。点击「打开飞瓜视频库」可主动切到前台。</span></li>
-          <li><strong>紧凑统计分组</strong><span>已采集页、候选账号、排除账号与重复跳过使用轻边框分组，标签与数字紧邻。</span></li>
-          <li><strong>按批次控制采集</strong><span>默认每批 50 页，每页随机等待 4–6 秒，均可设置。达到上限暂停并建议休息至少 3 小时，也可知晓风险后提前继续。</span></li>
-          <li><strong>24 小时自动清理</strong><span>本地观察每小时检查过期数据，启动时补清理。待上传和上传失败的记录保留，服务端确认成功或重复后才按期限清理。</span></li>
-          <li><strong>持续本地采集</strong><span>观察数据按条保存，取消原来的 6 MB／6,000 条限制。旧数据自动迁移，迁移成功后清理旧副本。</span></li>
-          <li><strong>飞瓜独立采集</strong><span>支持视频库自动翻页及默认开启的浏览采集。用户进入详情或接管列表时暂停自动翻页；飞瓜当前仅保存本地。</span></li>
-          <li><strong>等图片加载再采集</strong><span>等待头像、封面和行数据就绪后保存，图片超时则暂停，避免缺失数据就翻页。</span></li>
-          <li><strong>平台记录分开查看</strong><span>抖音、飞瓜页面各显示自己的最近 5 条和数量，近 24 小时记录页支持全部来源和平台筛选。各平台上传共用串行队列。</span></li>
-          <li><strong>跨网页悬浮入口</strong><span>支持移动、缩小与隐藏设置，切换网页后仍可打开插件。</span></li>
+          <li><strong>多平台悬浮状态</strong><span>抖音、快手分别显示已刷条数，飞瓜显示已采集页数。只展示运行、启动和暂停中的任务，点击对应行打开该平台面板。</span></li>
+          <li><strong>快手推荐流</strong><span>支持推荐视频采集、筛选与后台继续，复用抖音组件与筛选逻辑。</span></li>
+          <li><strong>任务与设置独立</strong><span>抖音、快手可以并行采集，分别保存设置、规则和草稿；暂停与运行控制互不影响。</span></li>
+          <li><strong>统一上传队列</strong><span>各平台结果共用串行上传队列，上传进度分别归属各自任务。今日已刷保留全平台汇总及平台筛选。</span></li>
         </ul>
       </section>
-      <aside>更新后请刷新采集网页并手动继续任务。超过 24 小时且无需等待上传的旧观察会被清理，需要长期保留的内容请及时导出。抖音上传保持原设置，飞瓜上传继续关闭。</aside>
+      <aside>更新后请刷新采集网页，并检查当前平台的采集目标和本地测试模式，再手动继续任务。飞瓜上传保持原设置。</aside>
       <footer>
         {previousVersion ? <span>从 V{previousVersion} 更新</span> : <span>当前版本 V{visibleVersion}</span>}
         <button onClick={() => window.close()}>知道了</button>

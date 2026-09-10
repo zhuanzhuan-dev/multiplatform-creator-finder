@@ -17,8 +17,12 @@ async function getPanelTab() {
 
 export function useExtensionState() {
   const [selectedPlatform, setSelectedPlatform] = useState("auto");
+  const selectedRef = useRef(selectedPlatform);
+  selectedRef.current = selectedPlatform;
   const refreshSequence = useRef(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
   const [notice, setNotice] = useState<{ text: string; error: boolean }>({ text: "", error: false });
   const [busyAction, setBusyAction] = useState<string>("");
   const [bridgeChecking, setBridgeChecking] = useState(false);
@@ -29,13 +33,30 @@ export function useExtensionState() {
   const settingsRequest = useRef(0);
   const [settingsNotice, setSettingsNotice] = useState("设置已保存");
 
+  useEffect(() => {
+    const consume=async()=>{
+      const current=await chrome.windows.getCurrent();
+      const response=await sendRuntime<{ok:boolean;platform?:string}>({type:'DRA_GET_PANEL_SELECTION',windowId:current.id});
+      if(response.platform) setSelectedPlatform(response.platform);
+    };
+    const listener=(message:{type?:string})=>{if(message.type==='DRA_PANEL_SELECTION_CHANGED')void consume().catch(()=>undefined);};
+    chrome.runtime.onMessage.addListener(listener);
+    void consume().catch(()=>undefined);
+    return ()=>{chrome.runtime.onMessage.removeListener(listener);};
+  }, []);
+
   const show = useCallback((text: string, error = false) => setNotice({ text, error }), []);
   const refresh = useCallback(async () => {
-    const sequence = ++refreshSequence.current;
+    const sequence = selectedRef.current === selectedPlatform ? ++refreshSequence.current : -1;
     const tab = await getPanelTab();
     const response = await sendRuntime<SnapshotResponse>({ type: "DRA_GET_STATUS", tabId: tab.id, url: tab.url, platform: selectedPlatform });
-    if (sequence === refreshSequence.current) setSnapshot(response);
-    if (!settingsRequest.current && response.settingsDraft) setSettingsNotice("已恢复未完成的草稿，请修正后使用");
+    if (sequence === refreshSequence.current && selectedRef.current === selectedPlatform) {
+      const changed = snapshotRef.current?.configPlatform !== response.configPlatform;
+      snapshotRef.current = response;
+      setSnapshot(response);
+      if (changed) { ++settingsRequest.current; setSettingsNotice(response.settingsDraft ? "已恢复未完成的草稿，请修正后使用" : "设置已保存"); }
+    }
+
     return response;
   }, [selectedPlatform]);
 
@@ -62,6 +83,7 @@ export function useExtensionState() {
 
   const saveSettings = useCallback(async (draft: SettingsDraft, autoSave = false) => {
     if (!snapshot) throw new Error("运行状态尚未加载");
+    const platform = snapshot.configPlatform || snapshot.state?.route?.platform || "douyin";
     const requestId = ++settingsRequest.current;
     setSettingsNotice("正在保存…");
     const current = snapshot.settings || {};
@@ -99,8 +121,8 @@ export function useExtensionState() {
       cloud: { ...(current.cloud || {}), enabled: true }
     };
     try {
-      const response = await sendRuntime<SaveResponse>({ type: "DRA_SAVE_CONFIG", settings, saveDraft: autoSave });
-      if (requestId === settingsRequest.current) {
+      const response = await sendRuntime<SaveResponse>({ type: "DRA_SAVE_CONFIG", platform, settings, saveDraft: autoSave });
+      if (requestId === settingsRequest.current && (snapshotRef.current?.configPlatform || snapshotRef.current?.state?.route?.platform || "douyin") === platform) {
         setSnapshot((value) => value ? { ...value, settings: response.settings, settingsDraft: response.settingsDraft, rules: response.rules } : value);
         const problemText = response.problems?.join("；") || "";
         setSettingsNotice(problemText ? `草稿已保存，待修正：${problemText}` : "设置已自动保存");
@@ -108,7 +130,7 @@ export function useExtensionState() {
       }
       return response;
     } catch (error) {
-      if (requestId === settingsRequest.current) {
+      if (requestId === settingsRequest.current && (snapshotRef.current?.configPlatform || snapshotRef.current?.state?.route?.platform || "douyin") === platform) {
         const text = error instanceof Error ? error.message : String(error);
         setSettingsNotice(`保存失败：${text}`);
         show(text, true);
@@ -119,11 +141,13 @@ export function useExtensionState() {
 
   const saveRules = useCallback(async (nextRules: RuleSettings) => {
     if (!snapshot) throw new Error("运行状态尚未加载");
+    const platform = snapshot.configPlatform || snapshot.state?.route?.platform || "douyin";
     try {
       const response = await sendRuntime<SaveResponse>({
-        type: "DRA_SAVE_CONFIG",
+        type: "DRA_SAVE_CONFIG", platform,
         rules: nextRules
       });
+      if ((snapshotRef.current?.configPlatform || snapshotRef.current?.state?.route?.platform || "douyin") !== platform) return response;
       setSnapshot((value) => value ? { ...value, settings: response.settings, rules: response.rules } : value);
       show("视频与账号规则已保存");
       return response;
@@ -139,9 +163,9 @@ export function useExtensionState() {
     try {
       if (action === "start") {
         show("正在连接研究台并绑定当前标签页…");
-        if (snapshot?.state?.route?.platform !== "feigua" && !snapshot?.tasks?.some(task => task.status === "running" || task.status === "starting")) await saveSettings(draft);
+        if (snapshot?.state?.route?.platform !== "feigua" && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
         const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_START", tabId: tab.id, platform: selectedPlatform });
+        await sendRuntime({ type: "DRA_START", tabId: tab.id, platform: snapshot?.state?.route?.platform });
       } else if (action === "resume") {
         show("正在恢复本轮，保留已有计数与记录…");
         const tab = await getPanelTab();

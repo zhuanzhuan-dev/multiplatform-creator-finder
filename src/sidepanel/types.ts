@@ -129,6 +129,7 @@ export interface Snapshot {
   daily?: { date: string; scanned: number };
   state?: RunState;
   settings?: Settings;
+  configPlatform?: string;
   settingsDraft?: EditableNumbers<Settings> | null;
   rules?: unknown;
   cloud?: CloudState;

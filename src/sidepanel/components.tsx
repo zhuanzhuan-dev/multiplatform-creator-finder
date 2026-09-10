@@ -212,7 +212,7 @@ interface SettingsPanelProps {
   saveStatus: string;
 }
 
-export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }: SettingsPanelProps) {
+export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, recommendationPlatform="douyin" }: SettingsPanelProps & {recommendationPlatform?: "douyin" | "kuaishou"}) {
   const number = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, [key]: inputNumber(event.target.value) });
   };
@@ -273,7 +273,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
           </div>
         </section>
 
-        <section className="setting-group" aria-labelledby="scheduleSettingTitle">
+        {recommendationPlatform==='douyin' ? <section className="setting-group" aria-labelledby="scheduleSettingTitle">
           <div className="setting-heading inline-heading"><span><strong id="scheduleSettingTitle">定时任务</strong><small>到点自动创建或复用抖音任务页</small></span><input aria-label="启用定时任务" type="checkbox" checked={draft.scheduleEnabled} disabled={disabled} onChange={checkbox("scheduleEnabled")} /></div>
           <div className={`schedule-editor ${draft.scheduleEnabled ? "" : "disabled"}`}>
             <div className="weekday-picker" aria-label="执行星期">
@@ -293,12 +293,12 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus }:
             <label className="check"><input type="checkbox" checked={draft.scheduleReuseExistingTab} disabled={disabled || !draft.scheduleEnabled} onChange={checkbox("scheduleReuseExistingTab")} />优先复用插件创建的抖音任务页</label>
             <button className="preset-button" disabled={disabled} onClick={applyPreset}>应用默认预设</button>
           </div>
-        </section>
+        </section> : null}
 
         <div className="form-grid compact-options">
           <label className="check"><input type="checkbox" checked={draft.keepSystemAwake} disabled={disabled} onChange={checkbox("keepSystemAwake")} />运行期间保持系统唤醒</label>
-          <label className="check"><input type="checkbox" checked={draft.markRejectedNotInterested} disabled={disabled} onChange={checkbox("markRejectedNotInterested")} />淘汰内容后标记为不感兴趣</label>
-          <p className="field-note shortcut-note">通过抖音网页的 R 快捷键执行。</p>
+{recommendationPlatform==='douyin' ? <>          <label className="check"><input type="checkbox" checked={draft.markRejectedNotInterested} disabled={disabled} onChange={checkbox("markRejectedNotInterested")} />淘汰内容后标记为不感兴趣</label>
+          <p className="field-note shortcut-note">通过抖音网页的 R 快捷键执行。</p></> : null}
 
         </div>
         <div className="settings-actions">
@@ -358,11 +358,6 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
   return (
     <div className="rules-disclosure">
       <div className="disclosure-body rules-form">
-        <section className="setting-group" aria-labelledby="feiguaRulesTitle">
-          <div className="setting-heading"><strong id="feiguaRulesTitle">飞瓜视频库</strong><span>按账号去重与排除</span></div>
-          <label>飞瓜规避词<textarea rows={3} aria-describedby="feiguaRulesHelp" value={draft.feiguaKeywords.join("、")} disabled={disabled} onChange={(event) => onChange({ ...draft, feiguaKeywords: terms(event.target.value) })} /></label>
-          <p id="feiguaRulesHelp" className="field-note">先在飞瓜设置筛选条件，再开始自动采集与翻页。标题、话题、热词或昵称命中任一规避词时，移除本轮整个账号。暂停保留候选；到达末页、目标或点击结束后汇总上传。规避词在开始本轮时生效；以下视频、账号及互动规则用于抖音推荐流。</p>
-        </section>
         <section className="setting-group" aria-labelledby="hardRulesTitle">
           <div className="setting-heading"><strong id="hardRulesTitle">视频与账号条件</strong><span>先判断视频，再判断达人</span></div>
           <div className="form-grid">

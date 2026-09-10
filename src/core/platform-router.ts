@@ -42,7 +42,9 @@ const PLATFORM_ROUTES: readonly PlatformRoute[] = [
   {
     platform: "kuaishou",
     hostnames: ["www.kuaishou.com"],
-    classify: () => ({ surface: "unknown", label: "快手", runnable: false })
+    classify: url => url.pathname === '/new-reco'
+      ? {surface:'recommend',label:'快手推荐',runnable:true}
+      : {surface:url.pathname.startsWith('/profile/')?'creator':'unknown',label:'快手：请打开推荐页',runnable:false}
   },
   {
     platform: "feigua",
@@ -76,6 +78,7 @@ export function firstRunnableTabInWindow<T extends TabRouteCandidate>(tabs: read
 }
 
 export function launchUrl(platform: PlatformId, surface: SurfaceId): string {
+  if (platform === "kuaishou" && surface === "recommend") return "https://www.kuaishou.com/new-reco";
   if (platform === "feigua" && surface === "library") return "https://dy.feigua.cn/app/#/video/library/all";
   if (platform === "douyin" && surface === "recommend") {
     return DOUYIN_RECOMMEND_URL;

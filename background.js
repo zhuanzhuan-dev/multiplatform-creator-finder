@@ -1,3 +1,4 @@
+import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './lib/kuaishou-task.js';
 import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, observationRecord as feiguaObservationRecord, observationStatus, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
@@ -44,10 +45,15 @@ const cloudClient = createCloudClient();
 const MAX_UPLOAD_ATTEMPTS = 8;
 
 let initialized = null;
+const pendingPanelSelections = new Map();
 let state = structuredClone(INITIAL_STATE);
 let settings = mergeSettings();
 let rules = mergeRules();
 let settingsDraft = null;
+let kuaishouConfig = {settings:mergeSettings(),rules:mergeRules(),settingsDraft:null};
+function configurationFor(platform) {
+  return platform === "kuaishou" ? kuaishouConfig : {settings,rules,settingsDraft};
+}
 let configQueue = Promise.resolve();
 let seenVideos = [];
 let creatorIndex = {};
@@ -77,7 +83,25 @@ const feigua = createFeiguaRuntime({
     return items;
   }
 });
-function taskForSession(sessionId) { return [state,feigua.state()].find(task=>task.runId===sessionId); }
+const kuaishou = createKuaishouRuntime({
+  settings:()=>kuaishouConfig.settings,rules:()=>kuaishouConfig.rules,authorize:checkCloudConnection,
+  ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
+  persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload,recordDecision,
+  recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
+  collect:async(observation,profile,decision,owner)=>{
+    reserveQueue(1);
+    await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'kuaishou',accountPlatform:'kuaishou'}]);
+    const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
+      dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
+      action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons}});
+    payload.comment_count=observation.comments ?? null;payload.favorite_count=observation.favorites ?? null;
+    Object.assign(payload.rpa_feedback,{source:'kuaishou-recommend',account_platform:'kuaishou',kuaishou_user_id:observation.authorId,
+      kuaishou_id:profile?.kuaishouId || '',no_profile_navigation:false,review_required:Boolean(decision.needsReview)});
+    addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner});
+    await persistWorkData();
+  }
+});
+function taskForSession(sessionId) { return [state,kuaishou.state(),feigua.state()].find(task=>task.runId===sessionId); }
 function incrementForSession(sessionId,key,amount=1) {
   const owner=taskForSession(sessionId); if(owner) owner.stats[key]=Number(owner.stats[key]||0)+amount;
 }
@@ -88,18 +112,19 @@ function reserveQueue(count) {
   let excess=Math.max(0,outbox.length+count-MAX_OUTBOX);
   outbox=outbox.filter(item=>{if(excess && settled.has(item.status)){excess--;return false;}return true;});
 }
-function aggregateState() { return aggregateTaskState([state,feigua.state()]); }
+function aggregateState() { return aggregateTaskState([state,kuaishou.state(),feigua.state()]); }
 function syncPower() {
-  if (isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
+  if (kuaishou.active() && kuaishou.state().runSettings?.keepSystemAwake || isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
   else chrome.power.releaseKeepAwake();
 }
 async function selectedTask(tabId,platform) {
+  if(platform==='kuaishou') return kuaishou.state();
   if(platform==='feigua') return feigua.state();
   if(platform==='douyin' || !Number.isInteger(tabId)) return state;
   const tab=Number.isInteger(tabId)?await chrome.tabs.get(tabId).catch(()=>null):null;
   const route=resolveRoute(tab?.pendingUrl || tab?.url || '');
   if(route?.platform==='feigua') return feigua.state();
-  if(route?.platform==='kuaishou') return stateSnapshotForTab(tabId);
+  if(route?.platform==='kuaishou') return kuaishou.state();
   if(route?.platform==='douyin')return state;
   return stateSnapshotForTab(tabId);
 }
@@ -127,13 +152,20 @@ function isRecommendationFeedUrl(value) {
 async function initialize() {
   if (initialized) return initialized;
   initialized = (async () => {
-    const saved = await chrome.storage.local.get([...Object.values(STORAGE_KEYS),"draFeiguaBrowsing"]);
+    const saved = await chrome.storage.local.get([...Object.values(STORAGE_KEYS),"draFeiguaBrowsing","draKuaishou","draKuaishouConfig"]);
     browseState={...browseState,...saved.draFeiguaBrowsing};
     const savedRules = saved[STORAGE_KEYS.rules] || {};
     const savedRulesVersion = Number(savedRules.version || 0);
     settings = mergeSettings(saved[STORAGE_KEYS.settings] || DEFAULT_SETTINGS);
     settingsDraft = saved[STORAGE_KEYS.settingsDraft] || null;
     rules = mergeRules(savedRules);
+    const previousKuaishou = saved.draKuaishouConfig;
+    kuaishouConfig = {
+      settings:mergeSettings(previousKuaishou?.settings || saved.draKuaishou?.state?.runSettings || settings),
+      rules:mergeRules(previousKuaishou?.rules || saved.draKuaishou?.state?.runRules || rules),
+      settingsDraft:previousKuaishou?.settingsDraft || null
+    };
+    await chrome.storage.local.set({draKuaishouConfig:kuaishouConfig});
     dailyStats = saved[STORAGE_KEYS.dailyStats] || null;
     const savedState = saved[STORAGE_KEYS.state] || {};
     state = {
@@ -163,6 +195,7 @@ async function initialize() {
       ? saved[STORAGE_KEYS.creatorIndex]
       : {};
     feigua.restore(saved);
+    kuaishou.restore(saved);
     if (savedState.route?.platform === "feigua") state = cloneInitialState();
     outbox = Array.isArray(saved[STORAGE_KEYS.outbox]) ? saved[STORAGE_KEYS.outbox] : [];
     await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
@@ -192,6 +225,7 @@ async function initialize() {
       ...feigua.storage()
     });
     await feigua.timers();
+    await kuaishou.timers();
     await updateTaskIndicators();
     await syncScheduleAlarm();
     await syncRunStopAlarm();
@@ -284,6 +318,7 @@ async function persistWorkData() {
     [STORAGE_KEYS.profileQueue]: [],
     [STORAGE_KEYS.outbox]: outbox,
     ...feigua.storage(),
+    ...kuaishou.storage(),
     [STORAGE_KEYS.cloudAuth]: cloudAuth,
     [STORAGE_KEYS.pairing]: pairing
   });
@@ -734,7 +769,7 @@ async function findOrCreateFeedTab({ windowId, reuseExisting = true, focusTab = 
   let createdByExtension = false;
   if (reuseExisting) {
     const candidates = await chrome.tabs.query({ windowId, url: "https://www.douyin.com/*" });
-    tab = firstRunnableTabInWindow(candidates, windowId);
+    tab = firstRunnableTabInWindow(candidates.filter(tab=>resolveRoute(tab.pendingUrl || tab.url || "")?.platform==='douyin'), windowId);
   }
   if (!tab) {
     tab = await chrome.tabs.create({ windowId, url: launchUrl("douyin", "recommend"), active: focusTab });
@@ -913,6 +948,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     if (cloudAuth !== uploadingAuth) return { status: "auth_error", reason: "connection_changed" };
     if (cloudAuth) cloudAuth.expired = true;
     await persistCloudAuth();
+    if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
     if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
     if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     state.lastError = "研究台授权已失效，请重新连接";
@@ -967,6 +1003,7 @@ async function checkCloudConnection() {
   if (result.status === 401) {
     cloudAuth.expired = true;
     await persistCloudAuth();
+    if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
     if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
     if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     else await persistState();
@@ -1039,6 +1076,7 @@ async function pollPairing() {
 }
 
 async function disconnectCloud() {
+  if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
   if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台已断开，请重新连接后继续");
   if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台已断开，请登录并连接后继续");
   cloudAuth = cloudAuth?.host_fingerprint ? { host_fingerprint: cloudAuth.host_fingerprint } : null;
@@ -1296,27 +1334,33 @@ async function handlePanelSkipped(observation, reason) {
 }
 
 async function saveConfiguration(message) {
-  if (isActiveRunStatus() && (message.settings && JSON.stringify(mergeSettings(message.settings)) !== JSON.stringify(settings) || message.rules && JSON.stringify(mergeRules(message.rules)) !== JSON.stringify(rules))) throw new Error("请先暂停抖音任务再修改共享配置");
-  const nextSettings = mergeSettings(message.settings || settings);
-  const nextRules = mergeRules(message.rules || rules);
-  const problems = [...validateSettings(nextSettings), ...validateRules(nextRules), ...validateSchedule(nextSettings.schedule)];
-  if (problems.length) {
-    if (!message.saveDraft) throw new Error(problems.join("；"));
-    await chrome.storage.local.set({ [STORAGE_KEYS.settingsDraft]: nextSettings });
-    settingsDraft = nextSettings;
-    return { ok: true, settings, settingsDraft, rules, problems };
+  const platform = message.platform || 'douyin';
+  if (!['douyin','kuaishou','feigua'].includes(platform)) throw new Error('请选择具体平台后修改设置');
+  const current = configurationFor(platform);
+  const active = platform === 'kuaishou' ? kuaishou.active() : platform === 'feigua' ? feigua.active() : isActiveRunStatus();
+  if (active && (message.settings && JSON.stringify(mergeSettings(message.settings)) !== JSON.stringify(current.settings) || message.rules && JSON.stringify(mergeRules(message.rules)) !== JSON.stringify(current.rules))) throw new Error('请先暂停当前平台任务再修改设置');
+  const nextSettings = mergeSettings(message.settings || current.settings);
+  const nextRules = mergeRules(message.rules || current.rules);
+  // Recommendation forms do not own Feigua-only fields.
+  if (platform === 'douyin') {
+    for (const key of Object.keys(current.settings).filter(key=>key.startsWith('feigua'))) nextSettings[key]=current.settings[key];
+    nextRules.feiguaKeywords=current.rules.feiguaKeywords;
   }
-  const scheduleChanged = JSON.stringify(settings.schedule) !== JSON.stringify(nextSettings.schedule);
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.settings]: nextSettings,
-    [STORAGE_KEYS.rules]: nextRules,
-    [STORAGE_KEYS.settingsDraft]: message.settings ? null : settingsDraft
-  });
-  settings = nextSettings;
-  rules = nextRules;
-  if (message.settings) settingsDraft = null;
-  if (scheduleChanged) await syncScheduleAlarm();
-  return { ok: true, settings, settingsDraft, rules, problems: [] };
+  const problems = [...validateSettings(nextSettings), ...validateRules(nextRules), ...validateSchedule(nextSettings.schedule)];
+  if (problems.length && !message.saveDraft) throw new Error(problems.join('；'));
+  const next = problems.length ? {...current,settingsDraft:nextSettings} : {
+    settings:nextSettings,rules:nextRules,settingsDraft:message.settings ? null : current.settingsDraft
+  };
+  if (platform === 'kuaishou') {
+    await chrome.storage.local.set({draKuaishouConfig:next});
+    kuaishouConfig = next;
+  } else {
+    const scheduleChanged = JSON.stringify(settings.schedule) !== JSON.stringify(next.settings.schedule);
+    await chrome.storage.local.set({[STORAGE_KEYS.settings]:next.settings,[STORAGE_KEYS.rules]:next.rules,[STORAGE_KEYS.settingsDraft]:next.settingsDraft});
+    settings=next.settings; rules=next.rules; settingsDraft=next.settingsDraft;
+    if (scheduleChanged) await syncScheduleAlarm();
+  }
+  return {ok:true,configPlatform:platform,...next,problems};
 }
 
 async function startRun({ trigger = "manual", scheduledFor = null, tabId = null } = {}) {
@@ -1340,7 +1384,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
       requested = { tab, createdByExtension: state.createdByExtension === true && state.feedTabId === tab.id };
     } else {
       const route = resolveRoute(current.pendingUrl || current.url || "");
-      if (route && route.platform !== "douyin") throw new Error(`${route.label}暂不支持运行，请打开飞瓜视频库`);
+
       requested = await findOrCreateFeedTab({ windowId: current.windowId, reuseExisting: true, focusTab: true });
       requested.createdByExtension ||= state.createdByExtension === true && state.feedTabId === requested.tab.id;
     }
@@ -1670,6 +1714,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "dra-history-cleanup") {
     initialize().then(()=>cleanupDecisions()).then(()=>chrome.runtime.sendMessage({type:"DRA_HISTORY_CHANGED"})).catch(()=>undefined);
   }
+  if ([KUAISHOU_ALARM,KUAISHOU_STOP_ALARM].includes(alarm.name)) initialize().then(()=>kuaishou.inspect()).catch(error=>kuaishou.pause(error.message));
   if ([FEIGUA_ALARM, FEIGUA_STOP_ALARM].includes(alarm.name)) initialize().then(()=>feigua.inspect()).catch(error=>feigua.pause(error.message));
   if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
@@ -1692,6 +1737,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedDebuggerTabs.delete(tabId);
+  if (tabId === kuaishou.state().feedTabId && kuaishou.active()) void kuaishou.pause("快手标签页已关闭");
   if (tabId === feigua.state().feedTabId && feigua.active()) void feigua.pause("飞瓜标签页已关闭");
   if (tabId === state.feedTabId && isActiveRunStatus()) setPaused("当前运行标签页已关闭").catch(() => undefined);
 });
@@ -1700,6 +1746,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === "complete") void ensureTabLauncher(tabId);
   const url = changeInfo.url || tab.url || tab.pendingUrl || "";
   if (resolveRoute(url)?.platform==='feigua' && /#\/(video-detail|blogger-detail)\//.test(url) && feigua.active()) void feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
+  if (tabId === kuaishou.state().feedTabId && kuaishou.active() && (changeInfo.url || changeInfo.status === "complete")) void kuaishou.inspect();
   if (tabId === feigua.state().feedTabId && feigua.active() && (changeInfo.url || changeInfo.status === "complete")) void feigua.inspect();
   if (tabId === state.feedTabId && state.status === "running" && changeInfo.status === "complete") {
     watchdog().catch((error) => setPaused("刷新后恢复失败", error.message));
@@ -1751,14 +1798,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Call immediately in the user gesture, before storage/auth initialization.
   if (message?.type === "DRA_OPEN_PANEL") {
     if (!sender.tab || (sender.frameId ?? 0) !== 0 || !/^https?:\/\//.test(sender.url || "")) { sendResponse({ ok:false }); return false; }
-    chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(() => sendResponse({ok:true})).catch(error => sendResponse({ok:false,error:error.message}));
+    if (['douyin','kuaishou','feigua'].includes(message.platform)) pendingPanelSelections.set(sender.tab.windowId,message.platform);
+    chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(() => {
+      chrome.runtime.sendMessage({type:'DRA_PANEL_SELECTION_CHANGED',windowId:sender.tab.windowId}).catch(()=>undefined);
+      sendResponse({ok:true});
+    }).catch(error => {pendingPanelSelections.delete(sender.tab.windowId);sendResponse({ok:false,error:error.message});});
     return true;
   }
   (async () => {
     await initialize();
+    if (sender.tab?.id === kuaishou.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_KUAISHOU_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return kuaishou.message(message,sender);
     if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
     if (['DRA_PAUSE','DRA_STOP','DRA_RESUME'].includes(message?.type) && message.runId) {
-      const target = message.platform === 'feigua' ? feigua.state() : state;
+      const target = message.platform === 'kuaishou' ? kuaishou.state() : message.platform === 'feigua' ? feigua.state() : state;
       if (message.runId !== target.runId) throw Error('任务已变化，请刷新状态后重试');
     }
     switch (message?.type) {
@@ -1851,6 +1903,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const task=rawQueue.then(()=>rawSamples("clear")); rawQueue=task.catch(()=>undefined);
         return {ok:true,samples:await task};
       }
+      case 'DRA_GET_PANEL_SELECTION': {
+        requireExtensionPage(sender);
+        const platform=pendingPanelSelections.get(message.windowId) || null;
+        pendingPanelSelections.delete(message.windowId);
+        return {ok:true,platform};
+      }
       case "DRA_GET_LAUNCHER":
         return { ok:true, launcher: launcherState(aggregateState()) };
       case 'DRA_EXPORT_OBSERVATIONS':
@@ -1867,7 +1925,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return {
           ok: true,
           state: selectedState,
-          tasks: [state, feigua.state()],
+          tasks: [state, kuaishou.state(), feigua.state()],
           feigua: {
             pageCount:feigua.collection()?.pages?.length || 0,
             pageNumber:feigua.state().lastPageNumber || '',
@@ -1878,9 +1936,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           browsing:{...browseState,...await observationStatus()},
           decisionHistory: history.items,
           decisionHistoryTotal: history.total,
-          settings,
-          settingsDraft,
-          rules,
+          configPlatform:selectedState.route?.platform || "douyin",
+          ...configurationFor(selectedState.route?.platform),
           teamDestination: TEAM_DESTINATION,
           cloud: cloudStatusSnapshot(),
           daily: dailySnapshot(dailyStats),
@@ -1931,23 +1988,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "DRA_START": {
         const tab = await chrome.tabs.get(message.tabId);
+        if(message.platform==='kuaishou' || message.platform==='auto' && resolveRoute(tab.pendingUrl || tab.url || '')?.platform==='kuaishou')return {ok:true,state:await kuaishou.start({tabId:tab.id,windowId:tab.windowId})};
         if (message.platform === 'feigua') {
           const destination=await feigua.openPage({windowId:tab.windowId});
           return {ok:true,state:await feigua.start(destination.id)};
         }
+        if (message.platform === "douyin") return {ok:true,state:await startRun({tabId:message.tabId})};
         const platform = resolveRoute(tab.pendingUrl || tab.url || '')?.platform;
         if (message.platform && message.platform !== 'auto' && platform !== message.platform) throw Error('请先切换到所选平台的采集页面，再开始该平台任务');
         return {ok:true,state:platform === 'feigua' ? await feigua.start(tab.id) : await startRun({tabId:message.tabId})};
       }
       case "DRA_RESUME":
+        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.resume({windowId:message.windowId})};
         return { ok: true, state: message.platform === "feigua" ? await feigua.resume({windowId:message.windowId}) : await resumeRun({ windowId: message.windowId }) };
       case "DRA_PAUSE":
+        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.pause()};
         if (message.platform === "feigua") return {ok:true,state:await feigua.pause()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
         await setPaused("用户暂停");
         await scheduleUpload(true);
         return { ok: true, state };
       case "DRA_STOP":
+        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.stop()};
         if (message.platform === "feigua") return {ok:true,state:await feigua.stop()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");
         return { ok: true, state: await stopRun() };
@@ -2000,8 +2062,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         else await persistState();
         return { ok: true };
       case "DRA_CLEAR_LOCAL_DATA":
-        if (isActiveRunStatus() || feigua.active() || feigua.collection() && !feigua.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
+        if (isActiveRunStatus() || kuaishou.active() || feigua.active() || feigua.collection() && !feigua.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
         feigua.clear();
+        kuaishou.clear();
         seenVideos = [];
         creatorIndex = {};
         outbox = [];
