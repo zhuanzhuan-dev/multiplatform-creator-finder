@@ -326,8 +326,8 @@ button.icon-button { display: grid; place-items: center; width: 2.75rem; height:
 .feigua-progress strong { font-size:1.75rem; }
 .feigua-progress small { font-size:.8125rem;color:var(--muted);font-weight:400; }
 .feigua-progress > span { font-size:.8125rem;color:var(--muted); }
-.feigua-metrics { display:grid;grid-template-columns:repeat(auto-fit,minmax(7rem,1fr));gap:.5rem 1rem;margin:.75rem 0; }
-.feigua-metrics div { display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;min-width:0;padding:.125rem 0; }
+.feigua-metrics { display:grid;grid-template-columns:repeat(auto-fit,minmax(8rem,1fr));gap:.5rem;margin:.75rem 0; }
+.feigua-metrics div { display:flex;align-items:baseline;justify-content:flex-start;gap:.5rem;min-width:0;padding:.375rem .5rem;border:1px solid var(--line-soft);border-radius:.375rem; }
 .feigua-metrics dt { font-size:.75rem;color:var(--muted); }
 .feigua-metrics dd { margin:0;font-size:1rem;font-weight:600;font-variant-numeric:tabular-nums; }
 .feigua-recovery { padding:.75rem;background:var(--warning-bg);color:var(--warning-text);border:1px solid var(--warning-line);border-radius:.625rem;font-size:.8125rem;line-height:1.6;overflow-wrap:anywhere; }
