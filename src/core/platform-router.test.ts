@@ -35,3 +35,9 @@ test("skips recommendation tabs that are navigating away", () => {
   const tabs = [{ id: 1, windowId: 7, url: DOUYIN_RECOMMEND_URL, pendingUrl: "https://www.douyin.com/" }];
   assert.equal(firstRunnableTabInWindow(tabs, 7), null);
 });
+
+test('runs only the implemented Feigua video library route', () => {
+  assert.equal(resolveRoute('https://dy.feigua.cn/app/#/video/library/all')?.surface, 'library');
+  assert.equal(isRunnableRoute('https://dy.feigua.cn/app/#/video/library/all?keyword=food'), true);
+  for (const url of ['https://dy.feigua.cn/app/#/workbench/index', 'https://dy.feigua.cn/app/#/blogger-detail/index?bloggerId=42', 'https://dy.feigua.cn/app/#/video/library/all-other', 'https://www.feigua.cn/', 'http://dy.feigua.cn/app/#/video/library/all', 'https://dy.feigua.cn.evil.test/app/#/video/library/all']) assert.equal(isRunnableRoute(url), false, url);
+});

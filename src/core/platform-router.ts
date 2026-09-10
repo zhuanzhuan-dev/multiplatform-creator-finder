@@ -3,7 +3,7 @@ import { DOUYIN_RECOMMEND_URL } from "../../lib/platform-routes.js";
 export { DOUYIN_RECOMMEND_URL };
 
 export type PlatformId = "douyin" | "kuaishou" | "feigua";
-export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "unknown";
+export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "library" | "unknown";
 
 export interface RouteContext {
   platform: PlatformId;
@@ -47,13 +47,18 @@ const PLATFORM_ROUTES: readonly PlatformRoute[] = [
   {
     platform: "feigua",
     hostnames: ["www.feigua.cn", "dy.feigua.cn"],
-    classify: () => ({ surface: "unknown", label: "飞瓜", runnable: false })
+    classify: (url) => url.hostname === "dy.feigua.cn" && url.pathname === "/app/" && /^#\/video\/library\/all(?:[?]|$)/.test(url.hash)
+      ? { surface: "library", label: "飞瓜视频库", runnable: true }
+      : /^#\/video-detail\/index(?:[?]|$)/.test(url.hash) ? {surface:'video',label:'飞瓜视频详情',runnable:false}
+      : /^#\/blogger-detail\/index(?:[?]|$)/.test(url.hash) ? {surface:'creator',label:'飞瓜达人详情',runnable:false}
+      : { surface: "unknown", label: "飞瓜：请打开视频库", runnable: false }
   }
 ];
 
 export function resolveRoute(input: string | URL): RouteContext | null {
   try {
     const url = input instanceof URL ? input : new URL(input);
+    if (url.protocol !== "https:") return null;
     const platform = PLATFORM_ROUTES.find((candidate) => candidate.hostnames.includes(url.hostname));
     if (!platform) return null;
     return { platform: platform.platform, url, ...platform.classify(url) };
@@ -71,6 +76,7 @@ export function firstRunnableTabInWindow<T extends TabRouteCandidate>(tabs: read
 }
 
 export function launchUrl(platform: PlatformId, surface: SurfaceId): string {
+  if (platform === "feigua" && surface === "library") return "https://dy.feigua.cn/app/#/video/library/all";
   if (platform === "douyin" && surface === "recommend") {
     return DOUYIN_RECOMMEND_URL;
   }

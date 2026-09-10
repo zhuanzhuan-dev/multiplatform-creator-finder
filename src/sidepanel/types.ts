@@ -1,4 +1,7 @@
+import { DEFAULT_KEYWORDS as FEIGUA_KEYWORDS } from "../../lib/feigua-parser.js";
 export interface Stats {
+  pagesCollected?: number;
+  rejectedProfiles?: number;
   scanned?: number;
   matched?: number;
   reviewQueued?: number;
@@ -42,7 +45,9 @@ export interface RunState {
   lastError?: string;
   backgroundMode?: string;
   runTrigger?: "manual" | "schedule";
-  runTarget?: RunTarget | null;
+  runTarget?: (Omit<RunTarget, "mode"> & { mode: TargetMode | "pages" }) | null;
+  batchStartPages?: number;
+  restUntil?: number | null;
   pageVisibility?: string;
   keepAliveAt?: string;
   runtime?: {
@@ -63,6 +68,7 @@ export type TargetMode = "time" | "count" | "both";
 
 export interface RunTarget {
   mode: TargetMode;
+  maxPages?: number;
   durationMinutes: number;
   maxItems: number;
 }
@@ -85,6 +91,9 @@ export interface ScheduleSettings {
 }
 
 export interface Settings {
+  feiguaTarget?: { maxPages?: number };
+  feiguaDelay?: { minSeconds: number; maxSeconds: number };
+  feiguaUploadEnabled?: boolean;
   engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
   dwell?: DwellPolicy;
   target?: RunTarget;
@@ -111,6 +120,10 @@ export interface CloudState {
 }
 
 export interface Snapshot {
+  pageRoute?: {platform:string;surface:string;label:string}|null;
+  browsing?: {enabled:boolean;count:number;lastCapturedAt?:string;lastPageUrl?:string;lastError?:string};
+  feigua?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;videos?:{videoId?:string;title?:string;coverUrl?:string;videoUrl?:string;durationSeconds?:number|null;metrics?:Record<string,string>;hotWords?:string[];observedAt?:string}[]}[]};
+  tasks?: RunState[];
   decisionHistory?: Decision[];
   decisionHistoryTotal?: number;
   daily?: { date: string; scanned: number };
@@ -207,6 +220,7 @@ export interface RuleSettings {
   };
   positiveCategories: CategoryRule[];
   gameBlacklist: string[];
+  feiguaKeywords: string[];
   riskGroups?: unknown[];
   [key: string]: unknown;
 }
@@ -229,6 +243,7 @@ const FALLBACK_RULES: RuleSettings = {
   },
   positiveCategories: [],
   gameBlacklist: [],
+  feiguaKeywords: [...FEIGUA_KEYWORDS],
   riskGroups: []
 };
 
@@ -265,6 +280,7 @@ export function rulesDraft(value: unknown): RuleSettings {
       enabled: category?.enabled !== false
     })),
     gameBlacklist: Array.isArray(source.gameBlacklist) ? source.gameBlacklist.map(String).filter(Boolean) : [],
+    feiguaKeywords: Array.isArray(source.feiguaKeywords) ? source.feiguaKeywords.map(String).filter(Boolean) : [...FEIGUA_KEYWORDS],
     riskGroups: []
   };
 }

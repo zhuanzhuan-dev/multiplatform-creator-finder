@@ -16,6 +16,8 @@ async function getPanelTab() {
 }
 
 export function useExtensionState() {
+  const [selectedPlatform, setSelectedPlatform] = useState("auto");
+  const refreshSequence = useRef(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean }>({ text: "", error: false });
   const [busyAction, setBusyAction] = useState<string>("");
@@ -29,12 +31,13 @@ export function useExtensionState() {
 
   const show = useCallback((text: string, error = false) => setNotice({ text, error }), []);
   const refresh = useCallback(async () => {
+    const sequence = ++refreshSequence.current;
     const tab = await getPanelTab();
-    const response = await sendRuntime<SnapshotResponse>({ type: "DRA_GET_STATUS", tabId: tab.id, url: tab.url, global: true });
-    setSnapshot(response);
+    const response = await sendRuntime<SnapshotResponse>({ type: "DRA_GET_STATUS", tabId: tab.id, url: tab.url, platform: selectedPlatform });
+    if (sequence === refreshSequence.current) setSnapshot(response);
     if (!settingsRequest.current && response.settingsDraft) setSettingsNotice("已恢复未完成的草稿，请修正后使用");
     return response;
-  }, []);
+  }, [selectedPlatform]);
 
   const updateCloud = useCallback((cloud?: CloudState) => {
     if (!cloud) return;
@@ -136,17 +139,17 @@ export function useExtensionState() {
     try {
       if (action === "start") {
         show("正在连接研究台并绑定当前标签页…");
-        await saveSettings(draft);
+        if (snapshot?.state?.route?.platform !== "feigua" && !snapshot?.tasks?.some(task => task.status === "running" || task.status === "starting")) await saveSettings(draft);
         const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_START", tabId: tab.id });
+        await sendRuntime({ type: "DRA_START", tabId: tab.id, platform: selectedPlatform });
       } else if (action === "resume") {
         show("正在恢复本轮，保留已有计数与记录…");
         const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId });
+        await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform: snapshot?.state?.route?.platform, runId: snapshot?.state?.runId });
       } else if (action === "pause") {
-        await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId });
+        await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId, platform: snapshot?.state?.route?.platform, runId: snapshot?.state?.runId });
       } else {
-        await sendRuntime({ type: "DRA_STOP", tabId: snapshot?.state?.feedTabId });
+        await sendRuntime({ type: "DRA_STOP", tabId: snapshot?.state?.feedTabId, platform: snapshot?.state?.route?.platform, runId: snapshot?.state?.runId });
       }
       await refresh();
       show("");
@@ -156,7 +159,7 @@ export function useExtensionState() {
     } finally {
       setBusyAction("");
     }
-  }, [refresh, saveSettings, show, snapshot?.state?.feedTabId]);
+  }, [refresh, saveSettings, show, snapshot, selectedPlatform]);
 
   const connectCloud = useCallback(async () => {
     if (connectInFlight.current) return;
@@ -196,7 +199,7 @@ export function useExtensionState() {
   useEffect(() => {
     const listener = (event: unknown) => {
       const message = event as { type?: string; tabId?: number | null };
-      if (message.type === "DRA_STATUS_CHANGED") void refresh().catch(() => undefined);
+      if (message.type === "DRA_STATUS_CHANGED" || message.type === "DRA_HISTORY_CHANGED") void refresh().catch(() => undefined);
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
@@ -227,6 +230,19 @@ export function useExtensionState() {
     return () => window.clearInterval(timer);
   }, [refresh, show, snapshot?.cloud?.pairing?.status, updateCloud]);
 
+  useEffect(() => {
+    const changed = () => { void refresh().catch(() => undefined); };
+    const updated = (_id: number, info: {url?:string;status?:string}) => { if(info.url || info.status === 'complete') changed(); };
+    chrome.tabs.onActivated.addListener(changed); chrome.tabs.onUpdated.addListener(updated);
+    return () => { chrome.tabs.onActivated.removeListener(changed); chrome.tabs.onUpdated.removeListener(updated); };
+  }, [refresh]);
+
+  const openFeigua = async () => {
+    setBusyAction('open');
+    try { const tab=await getPanelTab(); await sendRuntime({type:'DRA_OPEN_FEIGUA',windowId:tab.windowId}); await refresh(); }
+    catch(error){show(error instanceof Error?error.message:String(error),true);}
+    finally {setBusyAction('');}
+  };
   const openWorkbench = async () => {
     try { await sendRuntime({ type: "DRA_OPEN_WORKBENCH" }); }
     catch (error) { show(error instanceof Error ? error.message : String(error), true); }
@@ -234,8 +250,10 @@ export function useExtensionState() {
 
   return {
     snapshot,
+    selectedPlatform, setSelectedPlatform,
     settingsNotice,
     openWorkbench,
+    openFeigua,
     notice,
     busyAction,
     bridgeChecking,

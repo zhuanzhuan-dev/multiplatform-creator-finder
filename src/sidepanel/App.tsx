@@ -1,10 +1,14 @@
-import { ConfigurationPanel } from "./ConfigurationPanel";
-import { EngagementSettings } from "./EngagementSettings";
+import { PlatformTasks } from "./PlatformTasks";
+import { sendRuntime } from '../shared/chrome-runtime';
+import { DouyinTaskPage } from "./DouyinTaskPage";
+import { FeiguaTaskPage } from "./FeiguaTaskPage";
+import { LauncherSettings } from "./LauncherSettings";
 import { RawCaptureSettings } from "./RawCaptureSettings";
 import { usePanelPresence } from "./use-panel-presence";
 import { useEffect, useRef, useState } from "react";
-import { AdvancedRulesPanel, CloudPanel, RunOverview, SettingsPanel, StatsOverview } from "./components";
+import { CloudPanel, RecentDecisions } from "./components";
 import { rulesDraft, settingsDraft } from "./types";
+import { ThemePicker } from "../shared/ThemePicker";
 import { PreferencesMenu } from "./PreferencesMenu";
 import { useButtonGlow } from "../shared/useButtonGlow";
 import { useExtensionState } from "./use-extension-state";
@@ -24,6 +28,7 @@ export default function App() {
   const snapshot = extension.snapshot;
   const state = snapshot?.state || {};
   const active = state.status === "starting" || state.status === "running";
+  const configurationLocked = active || Boolean(snapshot?.tasks?.some(task => task.route?.platform !== "feigua" && ["starting","running"].includes(task.status || "")));
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -54,37 +59,23 @@ export default function App() {
       <header className="app-header">
         <h1 className="visually-hidden">多平台自动找号助手</h1>
         <span className="version-label" aria-label={`版本 ${visibleVersion}`}>V{visibleVersion}</span>
-        <div className="header-actions"><button onClick={() => void extension.openWorkbench()}>打开工作台</button><PreferencesMenu>
+        <div className="header-actions"><PlatformTasks tasks={snapshot.tasks || []} selected={extension.selectedPlatform} resolved={state.route?.platform} busy={Boolean(extension.busyAction)} onSelect={extension.setSelectedPlatform} /><button onClick={() => void extension.openWorkbench()}>打开工作台</button><PreferencesMenu>
           {cloudPanel}
-          <details className="debug-settings"><summary>开发调试</summary><label className="check"><input type="checkbox" checked={draft.dryRun} disabled={active || Boolean(extension.busyAction)} onChange={(event) => { const next = { ...draft, dryRun: event.target.checked }; setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} />本地测试（不连接、不上传）</label><RawCaptureSettings /></details>
+          <ThemePicker />
+          <LauncherSettings />
+          <details className="debug-settings"><summary>开发调试</summary><label className="check"><input type="checkbox" checked={draft.dryRun} disabled={configurationLocked || Boolean(extension.busyAction)} onChange={(event) => { const next = { ...draft, dryRun: event.target.checked }; setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} />本地测试（不连接、不上传）</label><RawCaptureSettings /></details>
         </PreferencesMenu></div>
       </header>
       {!connected ? cloudPanel : <div className="connection-summary">研究台已连接 · 结果自动同步</div>}
-      {draft.dryRun ? <p className="test-mode-note">本地测试模式 · 结果保存在本机，正式使用请在设置中关闭</p> : null}
-      <RunOverview
-        state={state}
-        cloud={snapshot.cloud}
-        outboxCount={snapshot.outboxCount || 0}
-        schedule={snapshot.schedule}
-        now={now}
-        busyAction={extension.busyAction}
-        startDisabled={!draft.dryRun && (!connected || extension.bridgeChecking)}
-        onStart={() => void extension.run("start", draft)}
-        onResume={() => void extension.run("resume", draft)}
-        onPause={() => void extension.run("pause", draft)}
-        onStop={() => void extension.run("stop", draft)}
-      />
-      {extension.notice.text ? <p className={`message ${extension.notice.error ? "error" : ""}`} aria-live="polite">{extension.notice.text}</p> : null}
-      <StatsOverview state={state} now={now} daily={snapshot.daily} history={snapshot.decisionHistory} historyTotal={snapshot.decisionHistoryTotal} />
-      <ConfigurationPanel runtime={
-        <SettingsPanel draft={draft} disabled={active || Boolean(extension.busyAction)} saveStatus={extension.settingsNotice} onChange={(next) => { setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} onSave={() => void extension.saveSettings(draft).catch(() => undefined)} />
-      } rules={
-        <AdvancedRulesPanel draft={ruleDraft} disabled={active || Boolean(extension.busyAction)} onChange={setRuleDraft} onSave={() => void extension.saveRules(ruleDraft).catch(() => undefined)} engagement={<EngagementSettings draft={draft} disabled={active || Boolean(extension.busyAction)} saveStatus={extension.settingsNotice} onChange={next => { setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} />} />
-      } />
-      <details className="notice-disclosure">
-        <summary>运行说明</summary>
-        <p>点击“开始本轮”会使用当前抖音推荐页，或打开同窗口中的推荐页。切换标签页、窗口或关闭侧栏后任务继续运行。抖音页面的悬浮入口或工具栏插件图标可重新打开面板，侧栏可随时暂停或停止。页面停滞时尝试恢复，持续异常或关闭任务页时暂停。点击“继续本轮”会恢复原推荐页；原页面已离开推荐页或关闭时，会在当前窗口找到或打开推荐页，保留本轮进度。每轮只有绑定页面能采集和上传。</p>
-      </details>
+      {draft.dryRun ? <p className="test-mode-note">新任务使用本地测试模式 · 新采集结果只存本机，已有正式上传队列继续同步</p> : null}
+      {extension.selectedPlatform!=='auto' ? <p className="field-note">正在手动查看{extension.selectedPlatform==='feigua'?'飞瓜':'抖音'}任务，当前网页不会改变。</p> : null}
+      {state.route?.platform === 'feigua' ? <FeiguaTaskPage extension={extension} draft={draft} now={now} />
+        : state.route?.platform === 'kuaishou' ? <section className="feigua-task-card"><h2>快手采集</h2><p>当前页面已识别为快手，采集界面尚未接入。抖音与飞瓜任务继续独立运行。</p></section>
+        : state.route?.platform === 'douyin' ? <DouyinTaskPage extension={extension} now={now} draft={draft} setDraft={setDraft} ruleDraft={ruleDraft} setRuleDraft={setRuleDraft} configurationLocked={configurationLocked} connected={connected} /> : <section className="feigua-task-card"><h2>选择采集平台</h2><p>当前页面尚未适配。通过上方任务选择查看抖音或飞瓜，再打开对应采集页。</p></section>}
+      {state.route?.platform !== 'douyin' ? <section className="feigua-task-card"><RecentDecisions now={now} history={snapshot.decisionHistory} total={snapshot.decisionHistoryTotal} />
+        <button onClick={()=>{void sendRuntime<{ok:boolean;records:unknown[]}>({type:'DRA_EXPORT_OBSERVATIONS'}).then(result=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.records,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`采集观察-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(error=>window.alert(String(error)));}}>导出本地完整观察</button>
+      </section> : null}
+
     </main>
   );
 }

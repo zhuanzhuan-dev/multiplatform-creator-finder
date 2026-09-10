@@ -1,6 +1,6 @@
 {
   "name": "multiplatform-creator-discovery-extension",
-  "version": "1.0.21",
+  "version": "1.0.27",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.15.1",
@@ -36,6 +36,7 @@
     "@vitejs/plugin-react": "6.1.1",
     "archiver": "8.0.0",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "6.2.5",
     "typescript": "7.0.2",
     "vite": "8.2.2"
   }

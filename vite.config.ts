@@ -14,6 +14,12 @@ function extensionRuntime(): Plugin {
     "workbench-bridge.js",
     "page/page-bridge.js",
     "content/douyin-content.js",
+    "content/feigua-content.js",
+    "content/floating-launcher.js",
+    "lib/launcher-position.js",
+    "content/feigua-page.js",
+    "lib/feigua-parser.js",
+    "lib/feigua-collection.js",
     "lib/platform-routes.js",
     "lib/douyin-page-parser.js",
     "src/content/douyin-recommend.ts",
@@ -27,6 +33,16 @@ function extensionRuntime(): Plugin {
     },
     async closeBundle() {
       await Promise.all([
+        esbuild({
+          entryPoints: [resolve(root, "content/floating-launcher.js")],
+          outfile: resolve(outputDirectory, "content/floating-launcher.js"),
+          bundle: true, format: "iife", platform: "browser", target: "chrome120", legalComments: "none"
+        }),
+        esbuild({
+          entryPoints: [resolve(root, "content/feigua-content.js")],
+          outfile: resolve(outputDirectory, "content/feigua-content.js"),
+          bundle: true, format: "iife", platform: "browser", target: "chrome120", legalComments: "none"
+        }),
         esbuild({
           entryPoints: [resolve(root, "background.js")],
           outfile: resolve(outputDirectory, "background.js"),

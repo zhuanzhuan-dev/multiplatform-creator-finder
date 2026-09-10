@@ -73,6 +73,8 @@ const browserMock = `<script>
     outboxCount: 0,
     teamDestination: { name: "研究台 · No Swipe" }
   };
+  snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}];
+  snapshot.feigua={pageCount:50,pageNumber:'50',finalized:false,candidates:[{name:'示例美食账号',followers:'12w'},{name:'示例旅行账号',followers:'8.5w'}]};
   const storageListeners = new Set();
   const previewStorageKey = "draPreviewStorage";
   const readStored = () => JSON.parse(localStorage.getItem(previewStorageKey) || "{}");
@@ -86,17 +88,31 @@ const browserMock = `<script>
   window.addEventListener("storage", event => {
     if (event.key === previewStorageKey) emitChanges(JSON.parse(event.oldValue || "{}"), JSON.parse(event.newValue || "{}"));
   });
+  let visitHidden = false;
   window.chrome = {
     windows: { getCurrent: async () => ({ id: 1 }) },
-    tabs: { query: async () => [{ id: 101, windowId: 1, active: true, url: ${JSON.stringify(DOUYIN_RECOMMEND_URL)} }] },
+    tabs: {
+      onActivated: { addListener() {}, removeListener() {} },
+      onUpdated: { addListener() {}, removeListener() {} },
+      sendMessage: async (_id, message) => {
+        if (message.type === "DRA_LAUNCHER_VISIT") visitHidden = message.hidden === true;
+        return {ok: true, visitHidden};
+      },
+      query: async () => [{ id: 101, windowId: 1, active: true, url: ${JSON.stringify(DOUYIN_RECOMMEND_URL)} }] },
     runtime: {
       lastError: null,
       getManifest: () => (${JSON.stringify({ version: extensionManifest.version, version_name: extensionManifest.version_name })}),
-      sendMessage: (message, callback) => queueMicrotask(() => callback(message.type === "DRA_GET_STATUS" ? snapshot : { ...snapshot, ok: true })),
+      sendMessage: (message, callback) => queueMicrotask(() => callback(message.type === "DRA_GET_STATUS" ? {...snapshot,state:message.platform === "feigua" ? snapshot.tasks[1] : snapshot.state} : { ...snapshot, ok: true })),
       onMessage: { addListener() {}, removeListener() {} }
     },
     storage: {
       local: {
+        remove: async key => {
+          const before = readStored(), after = {...before};
+          delete after[key];
+          localStorage.setItem(previewStorageKey, JSON.stringify(after));
+          emitChanges(before, after);
+        },
         get: async () => ({ draState: snapshot.state, ...readStored() }),
         set: async values => {
           const before = readStored();

@@ -1,8 +1,10 @@
+import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, observationRecord as feiguaObservationRecord, observationStatus, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
+import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
 import { rawSamples } from "./lib/raw-sample-store.js";
 import { sanitizeRaw } from "./lib/raw-sample.js";
 import { accountProfile } from "./lib/account-profile.js";
-import { launcherState, toolbarState } from "./lib/launcher-state.js";
+import { launcherState, toolbarState, aggregateTaskState } from "./lib/launcher-state.js";
 import { contentSkipDecision } from "./lib/content-type.js";
 import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
 import {
@@ -26,7 +28,7 @@ import { evaluateCreatorRules, evaluateVideoRules, scoreCreator, validateRules }
 import { createRunWaits, runtimeStalled, stepBudget, withTimeout } from "./lib/runtime-health.js";
 import { canResumeRun, elapsedRunMs, getRunLimitReason, normalizeRunTarget } from "./lib/run-limits.js";
 import { nextScheduledOccurrence, validateSchedule } from "./lib/scheduler.js";
-import { firstRunnableTabInWindow, isRunnableRoute, launchUrl, resolveRoute } from "./src/core/platform-router.ts";
+import { firstRunnableTabInWindow, launchUrl, resolveRoute } from "./src/core/platform-router.ts";
 
 const WATCHDOG_ALARM = "dra-watchdog";
 const SCHEDULE_ALARM = "dra-schedule-next";
@@ -50,6 +52,9 @@ let configQueue = Promise.resolve();
 let seenVideos = [];
 let creatorIndex = {};
 let outbox = [];
+let workDataWrites = Promise.resolve();
+let browseState = {enabled:true, count:0, lastError:""};
+let browseWrites=Promise.resolve();
 let dailyStats = null;
 let pendingDecisions = [];
 let historyWrites = Promise.resolve();
@@ -58,6 +63,46 @@ let cloudAuth = null;
 let pairing = null;
 const runWaits = createRunWaits();
 let watchdogInFlight = null;
+
+
+const feigua = createFeiguaRuntime({
+  settings:()=>settings, rules:()=>rules, authorize:checkCloudConnection,
+  ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
+  creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
+  recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
+  persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload,
+  savePage:async(page,runId,legacy=false)=>{
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy && settings.feiguaUploadEnabled===true && !feigua.state().runSettings?.dryRun})));
+    await stageFeiguaObservations();
+    return items;
+  }
+});
+function taskForSession(sessionId) { return [state,feigua.state()].find(task=>task.runId===sessionId); }
+function incrementForSession(sessionId,key,amount=1) {
+  const owner=taskForSession(sessionId); if(owner) owner.stats[key]=Number(owner.stats[key]||0)+amount;
+}
+function reserveQueue(count) {
+  const settled=new Set(['written','duplicate','dry-run']);
+  const retained=outbox.filter(item=>!settled.has(item.status));
+  if(retained.length+count>MAX_OUTBOX) throw Error('共享上传队列已满，请完成上传后继续；待上传数据已保留');
+  let excess=Math.max(0,outbox.length+count-MAX_OUTBOX);
+  outbox=outbox.filter(item=>{if(excess && settled.has(item.status)){excess--;return false;}return true;});
+}
+function aggregateState() { return aggregateTaskState([state,feigua.state()]); }
+function syncPower() {
+  if (isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
+  else chrome.power.releaseKeepAwake();
+}
+async function selectedTask(tabId,platform) {
+  if(platform==='feigua') return feigua.state();
+  if(platform==='douyin' || !Number.isInteger(tabId)) return state;
+  const tab=Number.isInteger(tabId)?await chrome.tabs.get(tabId).catch(()=>null):null;
+  const route=resolveRoute(tab?.pendingUrl || tab?.url || '');
+  if(route?.platform==='feigua') return feigua.state();
+  if(route?.platform==='kuaishou') return stateSnapshotForTab(tabId);
+  if(route?.platform==='douyin')return state;
+  return stateSnapshotForTab(tabId);
+}
 
 function isInvalidStoredCreatorName(value) {
   const text = String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().replace(/^@/, "");
@@ -75,13 +120,15 @@ function isActiveRunStatus(value = state.status) {
 }
 
 function isRecommendationFeedUrl(value) {
-  return isRunnableRoute(String(value || ""));
+  const route = resolveRoute(String(value || ""));
+  return route?.platform === "douyin" && route.runnable;
 }
 
 async function initialize() {
   if (initialized) return initialized;
   initialized = (async () => {
-    const saved = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+    const saved = await chrome.storage.local.get([...Object.values(STORAGE_KEYS),"draFeiguaBrowsing"]);
+    browseState={...browseState,...saved.draFeiguaBrowsing};
     const savedRules = saved[STORAGE_KEYS.rules] || {};
     const savedRulesVersion = Number(savedRules.version || 0);
     settings = mergeSettings(saved[STORAGE_KEYS.settings] || DEFAULT_SETTINGS);
@@ -115,7 +162,11 @@ async function initialize() {
     creatorIndex = saved[STORAGE_KEYS.creatorIndex] && typeof saved[STORAGE_KEYS.creatorIndex] === "object"
       ? saved[STORAGE_KEYS.creatorIndex]
       : {};
+    feigua.restore(saved);
+    if (savedState.route?.platform === "feigua") state = cloneInitialState();
     outbox = Array.isArray(saved[STORAGE_KEYS.outbox]) ? saved[STORAGE_KEYS.outbox] : [];
+    await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
+    await cleanupStoredObservations();
     cloudAuth = saved[STORAGE_KEYS.cloudAuth] && typeof saved[STORAGE_KEYS.cloudAuth] === "object"
       ? saved[STORAGE_KEYS.cloudAuth]
       : null;
@@ -137,8 +188,10 @@ async function initialize() {
       [STORAGE_KEYS.seenVideos]: seenVideos,
       [STORAGE_KEYS.creatorIndex]: creatorIndex,
       [STORAGE_KEYS.profileQueue]: [],
-      [STORAGE_KEYS.outbox]: outbox
+      [STORAGE_KEYS.outbox]: outbox,
+      ...feigua.storage()
     });
+    await feigua.timers();
     await updateTaskIndicators();
     await syncScheduleAlarm();
     await syncRunStopAlarm();
@@ -165,7 +218,8 @@ async function saveRawSample(sample, label = "unconfirmed", manual = false) {
 }
 
 async function updateTaskIndicators() {
-  const badge = toolbarState(state);
+  syncPower();
+  const badge = toolbarState(aggregateState());
   await Promise.all([
     chrome.action.setBadgeText({ text: badge.text }),
     chrome.action.setBadgeBackgroundColor({ color: badge.color }),
@@ -174,9 +228,9 @@ async function updateTaskIndicators() {
 }
 
 async function notifyLauncherWindow(windowId) {
-  const tabs = await chrome.tabs.query({ windowId, url: "https://www.douyin.com/*" });
+  const tabs = await chrome.tabs.query({ windowId, url: ["http://*/*", "https://*/*"] });
   for (const tab of tabs) chrome.tabs.sendMessage(tab.id, {
-    type: "DRA_LAUNCHER_CHANGED", launcher: launcherState(state, Boolean(panelPorts.get(windowId)?.size))
+    type: "DRA_LAUNCHER_CHANGED", launcher: launcherState(aggregateState())
   }).catch(() => undefined);
 }
 
@@ -206,6 +260,7 @@ async function flushDecisionHistory() {
 }
 
 async function persistState(notificationTabId = state.feedTabId) {
+  const task = workDataWrites.then(async () => {
   await flushDecisionHistory();
   await chrome.storage.local.set({
     [STORAGE_KEYS.state]: state,
@@ -213,9 +268,13 @@ async function persistState(notificationTabId = state.feedTabId) {
   });
   void updateTaskIndicators().catch(() => undefined);
   chrome.runtime.sendMessage({ type: "DRA_STATUS_CHANGED", tabId: notificationTabId, state }).catch(() => undefined);
+  });
+  workDataWrites = task.catch(()=>undefined);
+  return task;
 }
 
 async function persistWorkData() {
+  const task = workDataWrites.then(async () => {
   await flushDecisionHistory();
   await chrome.storage.local.set({
     [STORAGE_KEYS.state]: state,
@@ -224,9 +283,14 @@ async function persistWorkData() {
     [STORAGE_KEYS.creatorIndex]: creatorIndex,
     [STORAGE_KEYS.profileQueue]: [],
     [STORAGE_KEYS.outbox]: outbox,
+    ...feigua.storage(),
     [STORAGE_KEYS.cloudAuth]: cloudAuth,
     [STORAGE_KEYS.pairing]: pairing
   });
+  chrome.runtime.sendMessage({type:"DRA_STATUS_CHANGED"}).catch(()=>undefined);
+  });
+  workDataWrites = task.catch(()=>undefined);
+  return task;
 }
 
 async function persistCloudAuth() {
@@ -240,12 +304,12 @@ function increment(name, amount = 1) {
   state.stats[name] = Number(state.stats[name] || 0) + amount;
 }
 
-function recordDecision(decision = {}, observation = {}, profile = null) {
+function recordDecision(decision = {}, observation = {}, profile = null, owner = state) {
   const entry = {
     id: crypto.randomUUID(),
-    runId: state.runId || "",
-    runStartedAt: state.startedAt || "",
-    sourcePlatform: normalizeSourcePlatform(state.route?.platform || observation.sourcePlatform || observation.platform || "douyin"),
+    runId: owner.runId || "",
+    runStartedAt: owner.startedAt || "",
+    sourcePlatform: normalizeSourcePlatform(owner.route?.platform || observation.sourcePlatform || observation.platform || "douyin"),
     code: String(decision.code || "UNKNOWN"),
     reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean).slice(0, 4) : [],
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
@@ -253,25 +317,25 @@ function recordDecision(decision = {}, observation = {}, profile = null) {
     profileUrl: profile?.profileUrl || observation.profileUrl || decision.profileUrl || "",
     occurredAt: new Date().toISOString()
   };
-  state.lastDecision = entry;
+  owner.lastDecision = entry;
   pendingDecisions.push(entry);
   return entry;
 }
 
-function addOutbox(status, payload, error = "", { transitionPending = false } = {}) {
+function addOutbox(status, payload, error = "", { transitionPending = false, owner = state } = {}) {
+  reserveQueue(1);
   const item = {
     id: payload?.record_id || crypto.randomUUID(),
     status,
     payload,
     error,
     transitionPending,
-    sessionId: state.runId || payload?.run_id || "",
-    startedAt: state.startedAt || payload?.observed_at || new Date().toISOString(),
+    sessionId: owner.runId || payload?.run_id || "",
+    startedAt: owner.startedAt || payload?.observed_at || new Date().toISOString(),
     queuedAt: new Date().toISOString(),
     attempts: 0
   };
   outbox.push(item);
-  outbox = outbox.slice(-MAX_OUTBOX);
   return item;
 }
 
@@ -308,7 +372,8 @@ async function ensureHostFingerprint() {
 }
 
 function cloudReady() {
-  return Boolean(settings.cloud?.enabled && !settings.dryRun && cloudAuth?.device_token && !cloudAuth?.expired);
+  // Upload eligibility belongs to each queued item, independent of the next task's test-mode setting.
+  return Boolean(cloudAuth?.device_token && !cloudAuth?.expired);
 }
 
 function dwellSecondsFor(observation) {
@@ -384,7 +449,7 @@ async function setPaused(reason, error = "") {
   state.startupStage = "";
   state.pauseReason = reason;
   state.lastError = error || state.lastError;
-  chrome.power.releaseKeepAwake();
+  syncPower();
   await chrome.alarms.clear(WATCHDOG_ALARM);
   await chrome.alarms.clear(RUN_STOP_ALARM);
   if (state.feedTabId) {
@@ -401,6 +466,7 @@ async function pauseForRunLimit(reason) {
     state.lastScheduleResult = reason;
   }
   await setPaused(reason);
+  await scheduleUpload(true);
 }
 
 async function ensureDebugger(tabId) {
@@ -424,6 +490,11 @@ async function ensureDebugger(tabId) {
 }
 
 async function keepFeedPageActive(tabId) {
+  if (state.route?.platform === "feigua") {
+    await chrome.tabs.update(tabId, { autoDiscardable: false });
+    state.keepAliveAt = new Date().toISOString();
+    return;
+  }
   const runId = state.runId;
   const apply = async () => {
     await ensureDebugger(tabId);
@@ -582,7 +653,7 @@ async function sendTabMessage(tabId, message, attempts = 8) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
-  throw lastError || new Error("无法连接抖音页面脚本");
+  throw lastError || new Error("无法连接当前平台页面脚本");
 }
 
 async function ensureContentRuntime(tab) {
@@ -591,8 +662,29 @@ async function ensureContentRuntime(tab) {
   await chrome.tabs.reload(tab.id);
   const reloaded = await waitForTabComplete(tab.id);
   const status = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 12).catch(() => null);
-  if (!status?.ok) throw new Error("抖音页面脚本未加载，请刷新页面后重试");
+  if (!status?.ok) throw new Error("当前平台页面脚本未加载，请刷新页面后重试");
   return reloaded;
+}
+
+const launcherInjections = new Map();
+function ensureTabLauncher(tabId) {
+  if (!Number.isInteger(tabId)) return Promise.resolve();
+  if (launcherInjections.has(tabId)) return launcherInjections.get(tabId);
+  const pending = (async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!/^https?:\/\//.test(tab?.pendingUrl || tab?.url || "")) return;
+    const reply = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "DRA_LAUNCHER_PING" }), 1500).catch(() => null);
+    if (reply?.launcherVersion === pluginVersion()) return;
+    // Only install the small launcher; never start a collector or reload the page.
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content/floating-launcher.js"] });
+  })().catch(() => undefined).finally(() => launcherInjections.delete(tabId));
+  // Chrome protected pages and withheld site permissions reject injection.
+  launcherInjections.set(tabId, pending);
+  return pending;
+}
+async function restoreOpenTabLaunchers() {
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  await Promise.all(tabs.map(tab => ensureTabLauncher(tab.id)));
 }
 
 async function configureOpenTabSidePanels() {
@@ -723,16 +815,24 @@ async function getScheduleStatus() {
 
 function uploadableOutbox() {
   return outbox.filter((item) => {
-    if (item.transitionPending) return false;
+    if (item.transitionPending || Number(item.retryAt || 0)>Date.now()) return false;
     if (!["pending", "write-error", "failed"].includes(item.status)) return false;
     const record = item.payload;
+    const isFeigua = record?.rpa_feedback?.source_platform === 'feigua' || record?.rpa_feedback?.source === 'feigua-video-library' || item.sessionId && item.sessionId === feigua.state().runId;
+    if (isFeigua && settings.feiguaUploadEnabled !== true) return false;
     return record && typeof record === "object" && typeof record.record_id === "string" && Number.isInteger(record.feed_index);
   });
 }
 
 async function scheduleUpload(force = false, retry = false) {
+  await stageFeiguaObservations();
   const pending = uploadableOutbox();
-  if (!pending.length || !cloudReady()) { await chrome.alarms.clear(UPLOAD_ALARM); return; }
+  if (!pending.length || !cloudReady()) {
+    const retries=outbox.filter(item=>['pending','write-error','failed'].includes(item.status) && item.retryAt>Date.now() && (settings.feiguaUploadEnabled===true || item.payload?.rpa_feedback?.source_platform!=='feigua'));
+    if(cloudReady() && retries.length)await chrome.alarms.create(UPLOAD_ALARM,{when:Math.min(...retries.map(item=>item.retryAt))});
+    else await chrome.alarms.clear(UPLOAD_ALARM);
+    return;
+  }
   const oldest = Math.min(...pending.map(item => Date.parse(item.queuedAt) || Date.now()));
   const when = retry || flushInFlight ? Date.now() + 30_000
     : force || pending.length >= 10 ? Date.now() + 100 : Math.max(Date.now() + 100, oldest + 60_000);
@@ -754,21 +854,27 @@ function flushOutbox(options = {}) {
 }
 
 async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
+  await stageFeiguaObservations();
   if (!cloudReady()) return { status: "idle" };
   const pending = uploadableOutbox();
   if (!pending.length) return { status: "idle" };
   const oldest = Math.min(...pending.map((item) => Date.parse(item.queuedAt) || Date.now()));
   if (!force && pending.length < 10 && Date.now() - oldest < 60_000) return { status: "deferred" };
 
-  const sessionId = pending[0].sessionId || state.runId;
-  const startedAt = pending[0].startedAt || state.startedAt || new Date().toISOString();
-  let rows = pending.filter((item) => (item.sessionId || state.runId) === sessionId).slice(0, limit);
+  pending.sort((a,b)=>(Date.parse(a.payload.observed_at) || Date.parse(a.queuedAt) || 0)-(Date.parse(b.payload.observed_at) || Date.parse(b.queuedAt) || 0));
+  const first = pending[0];
+  const sessionId = first.sessionId || state.runId;
+
+  const owner = taskForSession(sessionId);
+  const startedAt = first.startedAt || owner?.startedAt || new Date().toISOString();
+  let end=pending.findIndex(item=>(item.sessionId || state.runId)!==sessionId);
+  let rows = pending.slice(0,end<0?limit:Math.min(end,limit));
   const encode = (list) => encodeIngestBody(buildIngestBody({
     sessionId,
     pluginVersion: pluginVersion(),
     hostFingerprint: cloudAuth.host_fingerprint || "",
     startedAt,
-    stats: state.stats || {},
+    stats: owner?.stats || {},
     heartbeat: { pending: uploadableOutbox().length },
     records: list.map((item) => item.payload)
   }));
@@ -779,7 +885,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.status = "dead";
       item.error = "单条观察超过上传体积上限";
     }
-    increment("uploadRejected", rows.length);
+    incrementForSession(sessionId,"uploadRejected",rows.length);
     await persistWorkData();
     return { status: "rejected" };
   }
@@ -792,10 +898,11 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     const message = error?.message || String(error);
     for (const item of rows) {
       item.status = "write-error";
+      item.retryAt=Date.now()+30_000;
       item.error = message;
       item.lastTriedAt = new Date().toISOString();
     }
-    state.lastError = `研究台上传失败：${message}`;
+    if (owner) owner.lastError = `研究台上传失败：${message}`;
     await persistWorkData();
     await persistState();
     return { status: "network_error" };
@@ -806,6 +913,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     if (cloudAuth !== uploadingAuth) return { status: "auth_error", reason: "connection_changed" };
     if (cloudAuth) cloudAuth.expired = true;
     await persistCloudAuth();
+    if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
     if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     state.lastError = "研究台授权已失效，请重新连接";
     await persistState();
@@ -818,13 +926,15 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.lastTriedAt = new Date().toISOString();
       item.error = result.payload?.error || `HTTP ${result.status}`;
       item.status = permanent || item.attempts >= MAX_UPLOAD_ATTEMPTS ? "dead" : "write-error";
+      item.retryAt=Date.now()+Math.min(1800000,30000*2**Math.min(item.attempts,6));
     }
-    if (permanent) increment("uploadRejected", rows.length);
+    if (permanent) incrementForSession(sessionId,"uploadRejected",rows.length);
     await persistWorkData();
     return { status: permanent ? "rejected" : "retry" };
   }
 
   const sets = ingestResultSets(result.payload);
+  await markObservationsUploaded([...sets.accepted,...sets.duplicated]);
   for (const item of rows) {
     const id = String(item.payload.record_id);
     item.attempts = Number(item.attempts || 0) + 1;
@@ -833,14 +943,15 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.status = sets.duplicated.has(id) ? "duplicate" : "written";
       item.flushedAt = new Date().toISOString();
       item.error = "";
-      if (item.sessionId === state.runId) increment("uploaded");
+      incrementForSession(item.sessionId,"uploaded");
     } else if (sets.rejected.has(id) || item.attempts >= MAX_UPLOAD_ATTEMPTS) {
       item.status = "dead";
       item.error = sets.rejected.get(id) || "retry_exhausted";
-      increment("uploadRejected");
+      incrementForSession(item.sessionId,"uploadRejected");
     } else {
       item.status = "write-error";
       item.error = "missing acknowledgement";
+      item.retryAt=Date.now()+30_000;
     }
   }
   await persistWorkData();
@@ -856,6 +967,7 @@ async function checkCloudConnection() {
   if (result.status === 401) {
     cloudAuth.expired = true;
     await persistCloudAuth();
+    if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
     if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     else await persistState();
     throw new Error("研究台授权已失效，请重新登录并连接。");
@@ -927,6 +1039,7 @@ async function pollPairing() {
 }
 
 async function disconnectCloud() {
+  if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台已断开，请重新连接后继续");
   if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台已断开，请登录并连接后继续");
   cloudAuth = cloudAuth?.host_fingerprint ? { host_fingerprint: cloudAuth.host_fingerprint } : null;
   pairing = null;
@@ -979,6 +1092,7 @@ function candidatePayload(observation, profile, videoDecision, creatorDecision, 
 async function handleObservation(observation, profile, panelRecovered = false) {
   await initialize();
   if (state.status !== "running") return { continue: false, reason: "任务未运行" };
+  try { reserveQueue(1); } catch(error) { await setPaused(error.message); return {continue:false,reason:error.message}; }
   const limitReason = getRunLimitReason(state, settings);
   if (limitReason) {
     await pauseForRunLimit(limitReason);
@@ -1138,6 +1252,7 @@ async function handleObservation(observation, profile, panelRecovered = false) {
 async function handlePanelSkipped(observation, reason) {
   await initialize();
   if (state.status !== "running") return { continue: false, reason: "任务未运行" };
+  try { reserveQueue(1); } catch(error) { await setPaused(error.message); return {continue:false,reason:error.message}; }
   const limitReason = getRunLimitReason(state, settings);
   if (limitReason) {
     await pauseForRunLimit(limitReason);
@@ -1181,7 +1296,7 @@ async function handlePanelSkipped(observation, reason) {
 }
 
 async function saveConfiguration(message) {
-  if (isActiveRunStatus()) throw new Error("请先暂停任务再修改配置");
+  if (isActiveRunStatus() && (message.settings && JSON.stringify(mergeSettings(message.settings)) !== JSON.stringify(settings) || message.rules && JSON.stringify(mergeRules(message.rules)) !== JSON.stringify(rules))) throw new Error("请先暂停抖音任务再修改共享配置");
   const nextSettings = mergeSettings(message.settings || settings);
   const nextRules = mergeRules(message.rules || rules);
   const problems = [...validateSettings(nextSettings), ...validateRules(nextRules), ...validateSchedule(nextSettings.schedule)];
@@ -1220,10 +1335,12 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     requested = await scheduledFeedTab();
   } else {
     const current = await chrome.tabs.get(tabId);
-    if (isRecommendationFeedUrl(current.url || current.pendingUrl || "")) {
+    if (isRecommendationFeedUrl(current.pendingUrl || current.url || "")) {
       const tab = await requireFeedTab(tabId);
       requested = { tab, createdByExtension: state.createdByExtension === true && state.feedTabId === tab.id };
     } else {
+      const route = resolveRoute(current.pendingUrl || current.url || "");
+      if (route && route.platform !== "douyin") throw new Error(`${route.label}暂不支持运行，请打开飞瓜视频库`);
       requested = await findOrCreateFeedTab({ windowId: current.windowId, reuseExisting: true, focusTab: true });
       requested.createdByExtension ||= state.createdByExtension === true && state.feedTabId === requested.tab.id;
     }
@@ -1251,7 +1368,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     createdByExtension: requested.createdByExtension,
     backgroundMode: trigger === "schedule" ? "scheduled-tab" : "current-tab",
     route: (() => {
-      const route = resolveRoute(requestedTab.url || requestedTab.pendingUrl || "");
+      const route = resolveRoute(requestedTab.pendingUrl || requestedTab.url || "");
       return route ? { platform: route.platform, surface: route.surface, label: route.label } : null;
     })(),
     lastScheduleAt,
@@ -1337,6 +1454,7 @@ async function resumeRun({ windowId } = {}) {
     const stillResuming = () => state.runId === runId && state.status === "starting";
     let tab = await requireFeedTab(previousFeedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
     if (!stillResuming()) return state;
+    if (tab && resolveRoute(tab.pendingUrl || tab.url || "")?.platform !== state.route?.platform && state.route?.platform) tab = null;
     const samePage = Boolean(tab);
     if (!tab) {
       // Release a page the user navigated to, including ownership used by Stop.
@@ -1415,7 +1533,7 @@ async function stopRun() {
   if (feedTabId) await sendTabMessage(feedTabId, { type: "DRA_STOP_LOOP" }, 1).catch(() => undefined);
   await chrome.alarms.clear(WATCHDOG_ALARM);
   await chrome.alarms.clear(RUN_STOP_ALARM);
-  chrome.power.releaseKeepAwake();
+  syncPower();
   await detachDebugger(feedTabId);
   await settleInterruptedTransitions();
   state.status = "stopped";
@@ -1469,7 +1587,7 @@ async function inspectRuntime() {
   const limitReason = getRunLimitReason(state, settings);
   if (limitReason) return pauseForRunLimit(limitReason);
   const tab = await requireFeedTab(state.feedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
-  if (!tab) return setPaused("当前运行标签页已关闭或离开抖音推荐页");
+  if (!tab || state.route?.platform && resolveRoute(tab.pendingUrl || tab.url || "")?.platform !== state.route.platform) return setPaused("当前运行标签页已关闭或离开原平台采集页");
   await keepFeedPageActive(tab.id);
   if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
   const status = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 1).catch(() => null);
@@ -1532,6 +1650,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await initialize();
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   await configureOpenTabSidePanels();
+  await restoreOpenTabLaunchers();
   const currentVersion = chrome.runtime.getManifest().version;
   if (details.reason === "update" && details.previousVersion && details.previousVersion !== currentVersion) {
     const url = new URL(chrome.runtime.getURL("updates/index.html"));
@@ -1541,13 +1660,17 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  initialize().then(() => Promise.all([syncScheduleAlarm(), syncRunStopAlarm(), configureOpenTabSidePanels()])).catch(() => undefined);
+  initialize().then(() => Promise.all([syncScheduleAlarm(), syncRunStopAlarm(), configureOpenTabSidePanels(), restoreOpenTabLaunchers()])).catch(() => undefined);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "dra-observations-cleanup") {
+    initialize().then(()=>cleanupStoredObservations()).then(()=>chrome.runtime.sendMessage({type:"DRA_STATUS_CHANGED"})).catch(()=>undefined);
+  }
   if (alarm.name === "dra-history-cleanup") {
     initialize().then(()=>cleanupDecisions()).then(()=>chrome.runtime.sendMessage({type:"DRA_HISTORY_CHANGED"})).catch(()=>undefined);
   }
+  if ([FEIGUA_ALARM, FEIGUA_STOP_ALARM].includes(alarm.name)) initialize().then(()=>feigua.inspect()).catch(error=>feigua.pause(error.message));
   if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
   if (alarm.name === RUN_STOP_ALARM) handleRunStopAlarm().catch((error) => setPaused("到点停止任务失败", error.message));
@@ -1558,18 +1681,31 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   });
 });
 
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  const launcher=ensureTabLauncher(tabId);
+  const navigation=chrome.tabs.get(tabId).then(async tab=>{
+    await initialize();
+    if(resolveRoute(tab.url || '')?.platform==='feigua' && /#\/(video-detail|blogger-detail)\//.test(tab.url || '') && feigua.active())await feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
+  }).catch(()=>{});
+  return Promise.all([launcher,navigation]);
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedDebuggerTabs.delete(tabId);
+  if (tabId === feigua.state().feedTabId && feigua.active()) void feigua.pause("飞瓜标签页已关闭");
   if (tabId === state.feedTabId && isActiveRunStatus()) setPaused("当前运行标签页已关闭").catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete") void ensureTabLauncher(tabId);
   const url = changeInfo.url || tab.url || tab.pendingUrl || "";
+  if (resolveRoute(url)?.platform==='feigua' && /#\/(video-detail|blogger-detail)\//.test(url) && feigua.active()) void feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
+  if (tabId === feigua.state().feedTabId && feigua.active() && (changeInfo.url || changeInfo.status === "complete")) void feigua.inspect();
   if (tabId === state.feedTabId && state.status === "running" && changeInfo.status === "complete") {
     watchdog().catch((error) => setPaused("刷新后恢复失败", error.message));
   }
-  if (tabId === state.feedTabId && isActiveRunStatus() && !isRecommendationFeedUrl(url)) {
-    setPaused("当前标签页已离开抖音推荐页").catch(() => undefined);
+  if (tabId === state.feedTabId && isActiveRunStatus() && (!isRecommendationFeedUrl(url) || state.route?.platform && resolveRoute(url)?.platform !== state.route.platform)) {
+    setPaused("当前标签页已离开原平台采集页").catch(() => undefined);
   }
 });
 
@@ -1614,13 +1750,42 @@ async function stopAtReachedTarget(result) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Call immediately in the user gesture, before storage/auth initialization.
   if (message?.type === "DRA_OPEN_PANEL") {
-    if (!sender.tab || !sender.url?.startsWith("https://www.douyin.com/")) { sendResponse({ ok:false }); return false; }
+    if (!sender.tab || (sender.frameId ?? 0) !== 0 || !/^https?:\/\//.test(sender.url || "")) { sendResponse({ ok:false }); return false; }
     chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(() => sendResponse({ok:true})).catch(error => sendResponse({ok:false,error:error.message}));
     return true;
   }
   (async () => {
     await initialize();
+    if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
+    if (['DRA_PAUSE','DRA_STOP','DRA_RESUME'].includes(message?.type) && message.runId) {
+      const target = message.platform === 'feigua' ? feigua.state() : state;
+      if (message.runId !== target.runId) throw Error('任务已变化，请刷新状态后重试');
+    }
     switch (message?.type) {
+      case 'DRA_FEIGUA_TAKEOVER': {
+        requireFeiguaSender(sender);
+        if(sender.tab.id===feigua.state().feedTabId && feigua.active())await feigua.pause('你已接管飞瓜页面，自动翻页已暂停');
+        return {ok:true};
+      }
+      case 'DRA_FEIGUA_BROWSE_ERROR':
+        requireFeiguaSender(sender);browseState.lastError=String(message.error || '浏览采集失败').slice(0,500);return {ok:true};
+      case 'DRA_FEIGUA_BROWSE_STATUS': {
+        requireFeiguaSender(sender);
+        if(/#\/(video-detail|blogger-detail)\//.test(sender.url || '') && feigua.active())await feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
+        browseState.lastCheckedAt=new Date().toISOString();
+        return {ok:true,enabled:browseState.enabled,automaticTab:feigua.active() && sender.tab.id===feigua.state().feedTabId};
+      }
+      case 'DRA_SET_FEIGUA_BROWSING':
+        requireExtensionPage(sender);
+        browseState.enabled=message.enabled===true; browseState.lastError='';
+        await chrome.storage.local.set({draFeiguaBrowsing:browseState});
+        return {ok:true};
+      case 'DRA_FEIGUA_BROWSE_PAGE': {
+        requireFeiguaSender(sender);
+        const work=browseWrites.then(()=>captureBrowsePage(message.page,sender));
+        browseWrites=work.catch(()=>{});return work;
+      }
+
       case "DRA_WAIT": {
         requireBoundContentTab(sender, message);
         if (state.status !== "running") return { ok: false, canceled: true };
@@ -1687,17 +1852,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return {ok:true,samples:await task};
       }
       case "DRA_GET_LAUNCHER":
-        return { ok:true, launcher: launcherState(state, Boolean(panelPorts.get(sender.tab?.windowId)?.size)) };
+        return { ok:true, launcher: launcherState(aggregateState()) };
+      case 'DRA_EXPORT_OBSERVATIONS':
+        requireExtensionPage(sender);
+        return {ok:true,records:await exportObservations()};
       case "DRA_QUERY_HISTORY":
         requireExtensionPage(sender);
         await flushDecisionHistory();
         return {ok:true,...await queryDecisions(message.options || {})};
       case "DRA_GET_STATUS": {
         await flushDecisionHistory();
-        const history = await decisionPreview();
+        const selectedState = await selectedTask(message.tabId, message.platform);
+        const history = await decisionPreview(selectedState.route?.platform || (selectedState === state ? 'douyin' : ''));
         return {
           ok: true,
-          state: message.global ? state : await stateSnapshotForTab(message.tabId),
+          state: selectedState,
+          tasks: [state, feigua.state()],
+          feigua: {
+            pageCount:feigua.collection()?.pages?.length || 0,
+            pageNumber:feigua.state().lastPageNumber || '',
+            finalized:feigua.collection()?.finalized === true,
+            candidates:Object.values(feigua.collection()?.accounts || {}).slice(0,10).map(row=>({name:row.authorName,followers:row.followerCount || '',avatarUrl:row.avatarUrl || '',profileUrl:row.profileUrl || '',videos:(row.videos || [row]).map(video=>({videoId:video.videoId,title:video.title,coverUrl:video.coverUrl,videoUrl:video.videoUrl,durationSeconds:video.durationSeconds,metrics:video.metrics,hotWords:video.hotWords,observedAt:video.observedAt}))}))
+          },
+          pageRoute:Number.isInteger(message.tabId)?resolveRoute((await chrome.tabs.get(message.tabId).catch(()=>null))?.url || ''):null,
+          browsing:{...browseState,...await observationStatus()},
           decisionHistory: history.items,
           decisionHistoryTotal: history.total,
           settings,
@@ -1730,16 +1908,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_OPEN_WORKBENCH":
         await chrome.tabs.create({ url: CLOUD_DESTINATION.workbenchUrl, active: true });
         return { ok: true };
-      case "DRA_START":
-        return { ok: true, state: await startRun({ tabId: message.tabId }) };
+      case "DRA_OPEN_FEIGUA": {
+        requireExtensionPage(sender);
+        const tab=await feigua.openPage({windowId:message.windowId});
+        return {ok:true,tabId:tab.id};
+      }
+      case "DRA_SAVE_FEIGUA_CONFIG": {
+        requireExtensionPage(sender);
+        const save=configQueue.then(async()=>{
+          if(feigua.active()) throw Error('请先暂停飞瓜再修改下轮采集设置');
+          const maxPages=Number(message.maxPages);
+          const minSeconds=Number(message.minSeconds), maxSeconds=Number(message.maxSeconds);
+          if(!Number.isInteger(maxPages) || maxPages<1 || maxPages>500) throw Error('页数需为 1 至 500 的整数');
+          if(!Number.isFinite(minSeconds) || !Number.isFinite(maxSeconds) || minSeconds<1 || maxSeconds>30 || maxSeconds<minSeconds) throw Error('翻页间隔需为 1 至 30 秒，最大值应大于或等于最小值');
+          if(!Array.isArray(message.keywords) || message.keywords.length>200 || message.keywords.some(word=>typeof word!=='string'||word.length>100)) throw Error('规避词格式不正确，最多 200 个词，每个词最多 100 字');
+          settings={...settings,feiguaTarget:{maxPages},feiguaDelay:{minSeconds,maxSeconds}};
+          rules={...rules,feiguaKeywords:[...new Set(message.keywords.map(word=>word.trim()).filter(Boolean))]};
+          await chrome.storage.local.set({[STORAGE_KEYS.settings]:settings,[STORAGE_KEYS.rules]:rules});
+          return {ok:true};
+        });
+        configQueue=save.catch(()=>undefined);return save;
+      }
+      case "DRA_START": {
+        const tab = await chrome.tabs.get(message.tabId);
+        if (message.platform === 'feigua') {
+          const destination=await feigua.openPage({windowId:tab.windowId});
+          return {ok:true,state:await feigua.start(destination.id)};
+        }
+        const platform = resolveRoute(tab.pendingUrl || tab.url || '')?.platform;
+        if (message.platform && message.platform !== 'auto' && platform !== message.platform) throw Error('请先切换到所选平台的采集页面，再开始该平台任务');
+        return {ok:true,state:platform === 'feigua' ? await feigua.start(tab.id) : await startRun({tabId:message.tabId})};
+      }
       case "DRA_RESUME":
-        return { ok: true, state: await resumeRun({ windowId: message.windowId }) };
+        return { ok: true, state: message.platform === "feigua" ? await feigua.resume({windowId:message.windowId}) : await resumeRun({ windowId: message.windowId }) };
       case "DRA_PAUSE":
+        if (message.platform === "feigua") return {ok:true,state:await feigua.pause()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
         await setPaused("用户暂停");
         await scheduleUpload(true);
         return { ok: true, state };
       case "DRA_STOP":
+        if (message.platform === "feigua") return {ok:true,state:await feigua.stop()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");
         return { ok: true, state: await stopRun() };
       case "DRA_SAVE_CONFIG": {
@@ -1749,11 +1958,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "DRA_OBSERVATION": {
         requireBoundContentTab(sender, message);
+        try {await saveObservations([normalizeDouyinObservation(message.observation || {},message.profile,state.runId)]);}
+        catch(error){await setPaused(error.message);return {ok:false,continue:false,error:error.message};}
         const result = await handleObservation(message.observation || {}, message.profile || null, Boolean(message.panelRecovered));
         return stopAtReachedTarget(result);
       }
       case "DRA_PANEL_SKIPPED": {
         requireBoundContentTab(sender, message);
+        try {await saveObservations([normalizeDouyinObservation(message.observation || {},null,state.runId)]);}
+        catch(error){await setPaused(error.message);return {ok:false,continue:false,error:error.message};}
         const result = await handlePanelSkipped(message.observation || {}, message.reason || "");
         return stopAtReachedTarget(result);
       }
@@ -1787,7 +2000,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         else await persistState();
         return { ok: true };
       case "DRA_CLEAR_LOCAL_DATA":
-        if (isActiveRunStatus()) throw new Error("请先停止任务再清空本地数据");
+        if (isActiveRunStatus() || feigua.active() || feigua.collection() && !feigua.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
+        feigua.clear();
         seenVideos = [];
         creatorIndex = {};
         outbox = [];
@@ -1804,3 +2018,59 @@ initialize().then(() => Promise.all([
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }),
   configureOpenTabSidePanels()
 ])).catch(() => undefined);
+
+function requireFeiguaSender(sender) {
+  if(!Number.isInteger(sender.tab?.id) || (sender.frameId ?? 0)!==0 || !/^https:\/\/dy\.feigua\.cn\/app\//.test(sender.url || ''))throw Error('消息不是来自飞瓜页面');
+}
+async function captureBrowsePage(page,sender) {
+  if(!browseState.enabled || feigua.active() && sender.tab.id===feigua.state().feedTabId)return {ok:true,skipped:true};
+  const tab=await chrome.tabs.get(sender.tab.id);
+  if(!tab.active)return {ok:true,skipped:true};
+  if(!page || page.pageUrl!==tab.url || !['library','video','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>60 || !page.rows.length || JSON.stringify(page).length>500000)throw Error('飞瓜浏览数据不完整或页面已变化');
+  const day=new Date().toISOString().slice(0,10);
+  const runId=`feigua-browse:${day}`;
+  try {
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,'browse'),uploadEligible:settings.feiguaUploadEnabled===true && !settings.dryRun})));
+    await stageFeiguaObservations();
+    const owner={runId,startedAt:page.capturedAt,route:{platform:'feigua'}};
+    for(const item of items)recordDecision({code:'FEIGUA_OBSERVED',reasons:['浏览采集已保存；自动翻页保持暂停']},item,null,owner);
+    browseState.lastCapturedAt=page.capturedAt; browseState.lastPageUrl=page.pageUrl; browseState.lastError='';
+    await chrome.storage.local.set({draFeiguaBrowsing:browseState});
+    await flushDecisionHistory();
+    await chrome.runtime.sendMessage({type:"DRA_STATUS_CHANGED"}).catch(()=>{});
+    return {ok:true,count:items.length};
+  } catch(error) {
+    browseState.lastError=error.message; browseState.enabled=false;
+    await chrome.storage.local.set({draFeiguaBrowsing:browseState});
+    if(feigua.active())await feigua.pause(error.message);
+    throw error;
+  }
+}
+
+let stagingObservations=null;
+function stageFeiguaObservations() {
+  if(settings.feiguaUploadEnabled!==true)return Promise.resolve();
+  if(stagingObservations)return stagingObservations;
+  stagingObservations=(async()=>{
+    const items=await pendingObservations();
+    for(const item of items) {
+      // Leave durable observations waiting while a full outbox drains.
+      if(!outbox.some(queued=>queued.id===item.id) && outbox.filter(queued=>!['written','duplicate','dry-run'].includes(queued.status)).length>=MAX_OUTBOX)break;
+      if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',feiguaObservationRecord(item),'',{owner:{runId:item.sessionId,startedAt:item.firstObservedAt}});
+      await persistWorkData();
+      await markObservationsQueued([item.id]);
+    }
+  })().finally(()=>{stagingObservations=null;});
+  return stagingObservations;
+}
+
+async function cleanupStoredObservations() {
+  const settled=new Set(['written','duplicate','dry-run']);
+  await markObservationsUploaded(outbox.filter(item=>['written','duplicate'].includes(item.status)).map(item=>item.id));
+  const pending=outbox.filter(item=>!settled.has(item.status));
+  const protectedSessions=pending.filter(item=>!item.payload?.aweme_id).map(item=>item.sessionId);
+  // Protect the in-progress read before its upload record has been enqueued.
+  if(['running','starting'].includes(state.status))protectedSessions.push(state.runId);
+  return cleanupObservations({protectedIds:pending.map(item=>item.id),
+    protectedEntities:pending.filter(item=>item.payload?.aweme_id).map(item=>JSON.stringify([item.sessionId,item.payload.aweme_id])),protectedSessions});
+}

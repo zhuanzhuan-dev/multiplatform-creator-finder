@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ThemePicker } from "../shared/ThemePicker";
 
 export function PreferencesMenu({ children }: { children?: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -9,7 +8,7 @@ export function PreferencesMenu({ children }: { children?: ReactNode }) {
 
   useEffect(() => {
     if (!open) return;
-    root.current?.querySelector("select")?.focus();
+    root.current?.querySelector<HTMLButtonElement>('[aria-label="关闭设置"]')?.focus();
     const dismissOutside = (event: Event) => {
       if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false);
     };
@@ -46,7 +45,6 @@ export function PreferencesMenu({ children }: { children?: ReactNode }) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
           </button>
         </div>
-        <ThemePicker />
         {children}
       </div>
     </div>

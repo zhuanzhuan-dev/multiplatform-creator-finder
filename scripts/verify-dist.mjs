@@ -7,6 +7,10 @@ const manifest = JSON.parse(await readFile(resolve(dist, "manifest.json"), "utf8
 const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 const backgroundSource = await readFile(resolve(dist, manifest.background?.service_worker || "background.js"), "utf8");
 
+if (!manifest.permissions?.includes("unlimitedStorage")) {
+  throw new Error("本地观察与上传队列需要 unlimitedStorage，避免共享默认配额导致保存失败");
+}
+
 if (manifest.version !== packageJson.version) {
   throw new Error(`版本号不一致：manifest=${manifest.version}，package=${packageJson.version}`);
 }
@@ -68,3 +72,6 @@ const javascript = (await Promise.all(files.filter((file) => file.endsWith(".js"
 if (javascript.includes("openOptionsPage")) throw new Error("侧边栏仍会打开独立高级设置页面");
 
 console.log(`dist verified: ${files.length} files, ${(totalBytes / 1024).toFixed(1)} KiB, V${manifest.version_name || manifest.version}`);
+
+const globalLauncher = manifest.content_scripts.find(entry => entry.js?.includes("content/floating-launcher.js"));
+if (!globalLauncher?.matches?.includes("http://*/*") || !globalLauncher.matches.includes("https://*/*") || globalLauncher.all_frames !== false) throw new Error("跨网页悬浮入口必须覆盖 HTTP(S) 顶层页面");

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "多平台自动找号助手",
-  "version": "1.0.21",
-  "version_name": "1.0.21",
+  "version": "1.0.27",
+  "version_name": "1.0.27",
   "description": "从多平台内容流中自动发现符合规则的达人和视频，并将观察结果上传到研究台。",
   "minimum_chrome_version": "120",
   "icons": {
@@ -17,13 +17,13 @@
     "power",
     "sidePanel",
     "storage",
-    "tabs"
+    "unlimitedStorage",
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
-    "https://www.douyin.com/*",
-    "https://kigrzhmcphrkqtuqthwb.supabase.co/*",
-    "https://fai.zhuanspirit.com/*",
-    "http://127.0.0.1:4173/*"
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -66,6 +66,26 @@
         "content/douyin-content.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://dy.feigua.cn/app/*"
+      ],
+      "js": [
+        "content/feigua-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/floating-launcher.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "side_panel": {

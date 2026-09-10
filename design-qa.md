@@ -1,5 +1,9 @@
 # Design QA
 
+## 2026-09-10 平台任务区域范围修正
+
+本次仅调整平台任务列表、自动跟随开关和平台 Logo。头部版本号、“打开工作台”按钮、连接说明、全局主题与按钮效果恢复为设计前状态。此前第二版全局配色的视觉验收已失效，范围以用户指出的平台任务区域为准。
+
 ## Comparison target
 
 - Source visual truth: `/Users/xinwy/Developer/work/creator-discovery-platform/multiplatform-creator-finder/artifacts/design-qa/design-reference-option-1.png`

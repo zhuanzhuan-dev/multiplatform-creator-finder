@@ -358,6 +358,11 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
   return (
     <div className="rules-disclosure">
       <div className="disclosure-body rules-form">
+        <section className="setting-group" aria-labelledby="feiguaRulesTitle">
+          <div className="setting-heading"><strong id="feiguaRulesTitle">飞瓜视频库</strong><span>按账号去重与排除</span></div>
+          <label>飞瓜规避词<textarea rows={3} aria-describedby="feiguaRulesHelp" value={draft.feiguaKeywords.join("、")} disabled={disabled} onChange={(event) => onChange({ ...draft, feiguaKeywords: terms(event.target.value) })} /></label>
+          <p id="feiguaRulesHelp" className="field-note">先在飞瓜设置筛选条件，再开始自动采集与翻页。标题、话题、热词或昵称命中任一规避词时，移除本轮整个账号。暂停保留候选；到达末页、目标或点击结束后汇总上传。规避词在开始本轮时生效；以下视频、账号及互动规则用于抖音推荐流。</p>
+        </section>
         <section className="setting-group" aria-labelledby="hardRulesTitle">
           <div className="setting-heading"><strong id="hardRulesTitle">视频与账号条件</strong><span>先判断视频，再判断达人</span></div>
           <div className="form-grid">
