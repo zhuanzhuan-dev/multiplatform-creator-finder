@@ -12,7 +12,7 @@ const folder = await mkdtemp(resolve(tmpdir(), 'finder-publication-'));
 let chrome; let ws;
 const delay = ms => new Promise(r => setTimeout(r, ms));
 try {
-  const bundle = await build({ stdin: { contents: `import './lib/douyin-page-parser.js'; import { buildObservationRecord } from './lib/cloud.js'; window.makeRecord = buildObservationRecord;`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'iife' });
+  const bundle = await build({ stdin: { contents: `import './lib/douyin-page-parser.js'; import { buildObservationRecord } from './lib/cloud.js'; import { imageUrl, pendingImage } from './content/feigua-page.js'; window.feiguaImages={imageUrl,pendingImage}; window.makeRecord = buildObservationRecord;`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'iife' });
   const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="img-src 'none'; media-src 'none'"><style>.card{width:600px;height:600px}.decoy{display:none}</style>
   <div class="video-create-time"><span class="time">· 1小时前</span></div>
   <div class="card" data-e2e="feed-item">
@@ -75,6 +75,27 @@ try {
     const unlinkedCovers=window.makeRecord({observation:current,profile:unlinked}).rpa_feedback.creator_work_covers;
     ensure(unlinkedCovers.length===1&&unlinkedCovers[0].aweme_id===''&&unlinkedCovers[0].video_url==='','never invent missing video identity');
     scenarios.push('lazy-only-works-and-missing-video-identity');
+
+    const avatarBox=document.createElement('div');avatarBox.dataset.e2e='video-avatar';
+    avatarBox.innerHTML='<img data-lazy-src="https://example.com/late-avatar.jpg">';card.append(avatarBox);
+    ensure(parser.parseFeedItem(card).avatarUrl==='https://example.com/late-avatar.jpg','extract lazy-only avatar');
+    avatarBox.querySelector('img').src='https://example.com/placeholder.png';
+    ensure(parser.parseFeedItem(card).avatarUrl==='https://example.com/late-avatar.jpg','exclude avatar placeholder');
+    works.setAttribute('aria-busy','true');
+    ensure(!parser.parseCreatorPanel(document,current).ready,'busy works must not be ready even with existing rows');
+    works.removeAttribute('aria-busy');
+    ensure(parser.parseCreatorPanel(document,current).ready,'works become readable after loading finishes');
+    works.innerHTML='<a href="https://www.douyin.com/video/900000003"></a>';
+    ensure(!parser.parseCreatorPanel(document,current).ready,'empty work cards must not produce a ready profile');
+    scenarios.push('lazy-avatar-busy-works-and-empty-work-cards');
+
+    const wrapped=document.createElement('div');wrapped.className='blogger-avatar';
+    wrapped.innerHTML='<img src="https://example.com/placeholder.png" data-src="https://example.com/feigua-avatar.jpg">';
+    ensure(window.feiguaImages.imageUrl(wrapped)==='https://example.com/feigua-avatar.jpg','unwrap Feigua avatar and read intended lazy source');
+    ensure(window.feiguaImages.pendingImage(wrapped)===0,'CDN decoding does not block URL capture');
+    wrapped.innerHTML='<img src="data:image/gif;base64,abc">';
+    ensure(window.feiguaImages.pendingImage(wrapped)===1,'placeholder-only image still waits');
+    scenarios.push('feigua-container-lazy-url-and-placeholder-readiness');
 
 
     document.body.innerHTML='<pre id="result">'+JSON.stringify({passed:true,scenarios})+'</pre>';

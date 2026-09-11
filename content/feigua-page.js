@@ -214,7 +214,7 @@ import * as core from "../lib/feigua-parser.js";
       pageTitle: document.title,
       capturedAt: new Date().toISOString(),
       rows: parsed,
-      pendingImages: rows.reduce((count,row)=>count + pendingImage(row.querySelector('.blogger-avatar')) + Array.from(row.querySelectorAll('.video-cover-link img')).filter(image=>pendingImage(image)).length,0),
+      pendingImages: rows.reduce((count,row)=>count + pendingImage(row.querySelector('.blogger-avatar')) + pendingImage(row.querySelector('.video-cover-link img')),0),
       diagnostics: {
         strategy: semanticRows.length ? "follower-semantic" : "generic-row",
         markerCount: markers.length,
@@ -227,13 +227,25 @@ import * as core from "../lib/feigua-parser.js";
 
 export { collectCurrentPage };
 
-export function imageUrl(image) { return image?.currentSrc || image?.src || ''; }
+export function imageUrl(element) {
+  const image = element?.querySelector?.('img') || element;
+  if (!image) return '';
+  const source = value => {
+    if (!value || !/^(https?:|\/)/i.test(value)) return '';
+    try {
+      const url = new URL(value, globalThis.location?.href || 'https://dy.feigua.cn/');
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password || /(?:^|[\/_.-])(?:placeholder|transparent|blank|loading)(?:[\/_.-]|$)/i.test(url.pathname)) return '';
+      return url.href;
+    } catch { return ''; }
+  };
+  // A lazy source is already usable data, even while an offscreen image is not decoded.
+  const lazy = ['data-src','data-original','data-lazy-src'].map(name => image.getAttribute?.(name)).map(source).find(Boolean);
+  const tiny = image.naturalWidth > 0 && image.naturalWidth <= 2 && image.naturalHeight > 0 && image.naturalHeight <= 2;
+  return lazy || (!tiny && [image.currentSrc, image.src, image.getAttribute?.('src')].map(source).find(Boolean)) || '';
+}
 export function pendingImage(image) {
-  // Missing, lazy placeholders and broken images must not count as loaded.
-  if (!image || !imageUrl(image) || !image.complete || !image.naturalWidth) return 1;
-  const lazySource=image.getAttribute('data-src') || image.getAttribute('data-original');
-  if (lazySource && new URL(lazySource,location.href).href !== imageUrl(image)) return 1;
-  return 0;
+  // Readiness means a usable URL was extracted, not successful CDN download.
+  return imageUrl(image) ? 0 : 1;
 }
 
 export function pageFingerprint(page) {

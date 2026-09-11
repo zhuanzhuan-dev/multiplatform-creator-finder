@@ -16,10 +16,13 @@ async function wait(run, milliseconds = 750) {
   await send(run, 'DRA_WAIT', { until: Date.now() + milliseconds });
 }
 async function readStablePage(run, previous = null) {
-  const deadline = Date.now() + 25000;
+  const deadline = Date.now() + 60000;
+  const pageUrl = location.href;
   let stable = '';
+  let stableSince = 0;
   let pendingImages = 0;
   while (active(run) && Date.now() < deadline) {
+    if (location.href !== pageUrl) throw new Error('飞瓜页面已切换，请检查当前页面后继续');
     const problem = pageProblem();
     if (problem && problem !== 'loading') throw new Error(problem);
     const page = collectCurrentPage();
@@ -27,14 +30,15 @@ async function readStablePage(run, previous = null) {
     page.fingerprint = pageFingerprint(page);
     const pager = pagination();
     const changed = !previous || page.fingerprint !== previous.fingerprint && (!previous.number || pager?.number !== previous.number);
-    if (!problem && !pendingImages && page.rows.length && changed) {
-      const content = JSON.stringify(page.rows);
-      if (stable === content) return page;
-      stable = content;
-    } else stable = '';
+    const completeRows = !page.diagnostics || page.diagnostics.candidateCount === page.diagnostics.parsedCount;
+    if (!problem && !pendingImages && page.rows.length && changed && completeRows) {
+      const content = JSON.stringify([pager?.number, page.rows]);
+      if (stable === content && Date.now() - stableSince >= 1500) return page;
+      if (stable !== content) { stable = content; stableSince = Date.now(); }
+    } else { stable = ''; stableSince = 0; }
     await wait(run);
   }
-  throw new Error(pendingImages ? `飞瓜还有 ${pendingImages} 张头像或封面未加载完成，已暂停；请检查图片加载后继续` : previous ? '飞瓜翻页后列表未更新，已暂停，请检查页面后继续' : '未读到完整飞瓜视频列表，请等待加载或检查登录后继续');
+  throw new Error(pendingImages ? `等待 60 秒后仍有 ${pendingImages} 个头像或封面地址未就绪，已暂停；请检查页面后继续` : previous ? '等待 60 秒后飞瓜列表仍未更新或稳定，已暂停，请检查页面后继续' : '等待 60 秒后仍未读到完整稳定的飞瓜视频列表，请检查加载或登录后继续');
 }
 async function loop(run) {
   try {

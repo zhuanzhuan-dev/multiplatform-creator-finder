@@ -133,13 +133,44 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
 
     async function waitForCreatorPanelUi(predicate, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
+      let lastProgress = Date.now();
       let last = await getCreatorPanelUi();
       while (Date.now() < deadline && running) {
+        const blocked = parser.parseCurrentFeed(document)?.blockedReason;
+        if (blocked) throw new Error(blocked);
         if (last?.ok && predicate(last.panelState || {}, last)) return { matched: true, ui: last };
+        if (Date.now() - lastProgress >= 5000) { await progress("profile"); lastProgress = Date.now(); }
         await sleep(250);
         last = await getCreatorPanelUi();
       }
       return { matched: false, ui: last };
+    }
+
+    async function waitForStableCreatorProfile(observation) {
+      const deadline = Date.now() + 30000;
+      let signature = '', stableSince = 0, readySince = null, lastProgress = Date.now();
+      let profile = null;
+      while (running && Date.now() < deadline) {
+        assertRunning();
+        const current = parser.parseCurrentFeed(document);
+        if (current?.blockedReason) throw new Error(current.blockedReason);
+        if (current && observationFingerprint(current) !== observationFingerprint(observation)) {
+          throw new Error('读取作品时推荐卡片已切换，请检查当前页面');
+        }
+        profile = parser.parseCreatorPanel(document, observation);
+        if (profile?.stale) return profile;
+        if (profile?.ready) {
+          readySince ??= Date.now();
+          // Timestamps change on every parse; only actual profile data determines stability.
+          const { collectedAt, ...data } = profile;
+          const next = JSON.stringify(data);
+          if (signature !== next) { signature = next; stableSince = Date.now(); }
+          if (Date.now() - stableSince >= 1000 && (profile.avatarUrl || Date.now() - readySince >= 5000)) return profile;
+        } else { signature = ''; readySince = null; }
+        if (Date.now() - lastProgress >= 5000) { await progress("profile"); lastProgress = Date.now(); }
+        await sleep(250);
+      }
+      return { ...profile, ready: false };
     }
 
     async function trustedClick(target) {
@@ -174,8 +205,11 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       let lastReason = "";
       let lastUi = null;
       for (let attempt = 1; attempt <= panelRecoveryAttempts && running; attempt += 1) {
-        const existing = parser.parseCreatorPanel(document, observation);
-        if (existing?.ready) return { ok: true, profile: existing, recovered: false };
+        let existing = parser.parseCreatorPanel(document, observation);
+        if (existing?.ready) {
+          existing = await waitForStableCreatorProfile(observation);
+          if (existing?.ready) return { ok: true, profile: existing, recovered: false };
+        }
         lastProfile = existing;
 
         if (existing?.stale) {
@@ -196,13 +230,16 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
 
         let ui = opened.ui || await getCreatorPanelUi();
         if (!ui.panelState?.ready) {
-          const worksTarget = ui.targets?.works;
-          const clicked = await trustedClick(worksTarget);
-          if (!clicked?.ok) {
-            lastReason = clicked?.error || "真实点击 TA 的作品失败";
-            continue;
+          // An already selected tab may still be fetching. Re-clicking can restart that work.
+          if (!ui.panelState?.selected) {
+            const worksTarget = ui.targets?.works;
+            const clicked = await trustedClick(worksTarget);
+            if (!clicked?.ok) {
+              lastReason = clicked?.error || "真实点击 TA 的作品失败";
+              continue;
+            }
           }
-          const ready = await waitForCreatorPanelUi((state) => state.selected && state.hasWorks, 8_000);
+          const ready = await waitForCreatorPanelUi((state) => state.selected && state.hasWorks && !state.loading, 30_000);
           ui = ready.ui;
           lastUi = ui;
           if (!ready.matched) {
@@ -215,17 +252,10 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           }
         }
 
-        const deadline = Date.now() + 8_000;
-        while (Date.now() < deadline && running) {
-          await sleep(250);
-          const profile = parser.parseCreatorPanel(document, observation);
-          lastProfile = profile;
-          if (profile?.ready) return { ok: true, profile, recovered: opened.method !== "existing" || attempt > 1 };
-          if (profile?.stale) {
-            lastReason = "当前卡片内仍是上一位达人侧栏";
-            break;
-          }
-        }
+        const profile = await waitForStableCreatorProfile(observation);
+        lastProfile = profile;
+        if (profile?.ready) return { ok: true, profile, recovered: opened.method !== "existing" || attempt > 1 };
+        lastReason = profile?.stale ? "当前卡片内仍是上一位达人侧栏" : "等待 30 秒后达人资料或作品列表仍未稳定";
       }
       const state = lastUi?.panelState || lastProfile?.panelState || {};
       const detail = lastReason

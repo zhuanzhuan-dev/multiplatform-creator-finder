@@ -117,15 +117,19 @@ function syncPower() {
   if (kuaishou.active() && kuaishou.state().runSettings?.keepSystemAwake || isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
   else chrome.power.releaseKeepAwake();
 }
+function douyinTaskSnapshot() {
+  // Page selection must work before the first run has persisted a route.
+  return state.route ? state : {...state,route:{platform:'douyin',surface:'recommend',label:'抖音推荐'}};
+}
 async function selectedTask(tabId,platform) {
   if(platform==='kuaishou') return kuaishou.state();
   if(platform==='feigua') return feigua.state();
-  if(platform==='douyin' || !Number.isInteger(tabId)) return state;
+  if(platform==='douyin' || !Number.isInteger(tabId)) return douyinTaskSnapshot();
   const tab=Number.isInteger(tabId)?await chrome.tabs.get(tabId).catch(()=>null):null;
   const route=resolveRoute(tab?.pendingUrl || tab?.url || '');
   if(route?.platform==='feigua') return feigua.state();
   if(route?.platform==='kuaishou') return kuaishou.state();
-  if(route?.platform==='douyin')return state;
+  if(route?.platform==='douyin')return douyinTaskSnapshot();
   return stateSnapshotForTab(tabId);
 }
 
@@ -1925,7 +1929,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return {
           ok: true,
           state: selectedState,
-          tasks: [state, kuaishou.state(), feigua.state()],
+          tasks: [douyinTaskSnapshot(), kuaishou.state(), feigua.state()],
           feigua: {
             pageCount:feigua.collection()?.pages?.length || 0,
             pageNumber:feigua.state().lastPageNumber || '',
