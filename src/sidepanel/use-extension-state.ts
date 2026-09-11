@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sendRuntime } from "../shared/chrome-runtime";
 import type { CloudState, RuleSettings, SettingsDraft, Snapshot } from "./types";
@@ -45,7 +46,7 @@ export function useExtensionState() {
     return ()=>{chrome.runtime.onMessage.removeListener(listener);};
   }, []);
 
-  const show = useCallback((text: string, error = false) => setNotice({ text, error }), []);
+  const show = useCallback((text: string, error = false) => setNotice({ text: error ? errorMessage(text) : text, error }), []);
   const refresh = useCallback(async () => {
     const sequence = selectedRef.current === selectedPlatform ? ++refreshSequence.current : -1;
     const tab = await getPanelTab();

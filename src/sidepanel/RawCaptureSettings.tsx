@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { useEffect, useState } from 'react';
 
 async function request(message: Record<string, unknown>) {
@@ -34,6 +35,6 @@ export function RawCaptureSettings() {
     <p className="field-note">选择你实际看到的类型，再点击采样。自动采样均标记为“尚未确认”。</p>
     <div className="bridge-actions"><button disabled={busy||!enabled} onClick={()=>void action('DRA_CAPTURE_RAW')}>采样当前卡片</button><button disabled={busy} onClick={()=>void action('DRA_EXPORT_RAW')}>导出采样</button><button disabled={busy} className="danger-text" onClick={()=>void action('DRA_CLEAR_RAW')}>清空采样</button></div>
     <p className="field-note">已保存 {samples.count} 条 · {(samples.bytes/1024/1024).toFixed(1)} MB <button disabled={busy} onClick={()=>void refresh().catch(e=>setNotice(e.message))}>刷新</button></p>
-    <p className="field-note" role="status">{notice}</p>
+    <p className="field-note" role="status">{errorMessage(notice)}</p>
   </div>;
 }

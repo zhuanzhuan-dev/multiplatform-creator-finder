@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { useEffect, useState } from 'react';
 import { canResumeRun, elapsedRunMs } from '../../lib/run-limits.js';
 import { formatDuration } from './format';
@@ -42,7 +43,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
       <p className="field-note">适配视频库、视频详情和达人详情。用户负责点击，插件只读保存；暂停或结束自动翻页后继续生效。进入详情会暂停自动翻页。</p>
       <p className="field-note">{snapshot.pageRoute?.platform==='feigua' ? ['library','video','creator'].includes(snapshot.pageRoute.surface) ? `当前页面：${snapshot.pageRoute.label}` : '当前飞瓜页面尚未适配浏览采集' : '切换至飞瓜页面后进行浏览采集'}</p>
       <p className="field-note">已保存 {snapshot.browsing?.count || 0} 条观察{snapshot.browsing?.lastCapturedAt ? ` · 最近浏览采集 ${new Date(snapshot.browsing.lastCapturedAt).toLocaleTimeString('zh-CN')}` : ''}</p>
-      {snapshot.browsing?.lastError ? <p role="alert">{snapshot.browsing.lastError}</p> : null}
+      {snapshot.browsing?.lastError ? <p role="alert">{errorMessage(snapshot.browsing.lastError)}</p> : null}
     </section>
     <section className="feigua-task-card" aria-labelledby="feiguaTaskTitle">
       <div className="feigua-task-heading"><h2 id="feiguaTaskTitle">飞瓜视频库采集</h2><span className="badge">{localOnly?'仅本地保存':'汇总后上传'}</span></div>
@@ -55,7 +56,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
         <div><dt>重复跳过</dt><dd>{state.stats?.duplicates || 0}</dd></div>
       </dl>
       <p className="field-note">累计采集 {formatDuration(elapsedRunMs(state,now))}{details?.pageNumber ? ` · 最近采集第 ${details.pageNumber} 页` : ''}{active ? ` · ${state.startupStage || phase[state.runtime?.phase || ''] || '准备采集'}` : ''}</p>
-      {state.pauseReason || state.lastError ? <p className="feigua-recovery" role="status">{state.pauseReason || state.lastError}</p> : null}
+      {state.pauseReason || state.lastError ? <p className="feigua-recovery" role="status">{errorMessage(state.pauseReason || state.lastError)}</p> : null}
       {state.restUntil ? <p className="feigua-recovery" role="status">建议休息至 {new Date(state.restUntil).toLocaleString('zh-CN')}。{now < state.restUntil ? '提前继续可能触发访问限制。' : '建议休息时间已到，可手动继续。'}继续后开始下一批，累计记录保留。</p> : null}
       <div className="actions">
         {active ? <button className="primary" disabled={busy} onClick={()=>void extension.run('pause',draft)}>{state.status==='starting'?'取消恢复':'暂停自动翻页'}</button> : <button className="primary" disabled={busy || (!localOnly && !snapshot.cloud?.connected)} onClick={()=>void extension.run(resumable?'resume':'start',draft)}>{resumable?(state.restUntil && now<state.restUntil?'知晓风险，提前继续':'继续采集'):'开始新一轮采集'}</button>}
@@ -88,7 +89,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
         <p className="field-note">每页保存后在区间内随机等待，再翻下一页；另需等待列表加载。达到每批页数后自动暂停，建议休息至少 3 小时，可手动提前继续。到达当前筛选末页时结束本轮。随机等待仍有触发访问限制的风险。</p>
         <label className="field">整账号排除词<textarea rows={6} value={keywords} disabled={active || saving} onChange={event=>setKeywords(event.target.value)} /></label>
         <p className="field-note">每行一个词。视频标题、热词、话题或达人昵称命中时排除整个账号。修改只作用于新一轮飞瓜任务，暂停中的任务继续使用原规则。</p>
-        <button type="submit" disabled={active || saving}>{saving?'保存中…':'保存飞瓜设置'}</button><p className="field-note" role="status">{notice}</p>
+        <button type="submit" disabled={active || saving}>{saving?'保存中…':'保存飞瓜设置'}</button><p className="field-note" role="status">{errorMessage(notice)}</p>
       </form>
     </details>
   </>;

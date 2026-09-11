@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { PlatformTasks } from "./PlatformTasks";
 import { sendRuntime } from '../shared/chrome-runtime';
 import { DouyinTaskPage } from "./DouyinTaskPage";
@@ -76,7 +77,7 @@ export default function App() {
       {state.route?.platform === 'feigua' ? <FeiguaTaskPage extension={extension} draft={draft} now={now} />
         : ['douyin','kuaishou'].includes(state.route?.platform || '') ? <DouyinTaskPage extension={extension} now={now} draft={draft} setDraft={setDraft} ruleDraft={ruleDraft} setRuleDraft={setRuleDraft} configurationLocked={configurationLocked} connected={connected} /> : <section className="feigua-task-card"><h2>选择采集平台</h2><p>当前页面尚未适配。通过上方任务选择查看抖音、快手或飞瓜，再打开对应采集页。</p></section>}
       {!['douyin','kuaishou'].includes(state.route?.platform || '') ? <section className="feigua-task-card"><RecentDecisions now={now} history={snapshot.decisionHistory} total={snapshot.decisionHistoryTotal} />
-        <button onClick={()=>{void sendRuntime<{ok:boolean;records:unknown[]}>({type:'DRA_EXPORT_OBSERVATIONS'}).then(result=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.records,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`采集观察-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(error=>window.alert(String(error)));}}>导出本地完整观察</button>
+        <button onClick={()=>{void sendRuntime<{ok:boolean;records:unknown[]}>({type:'DRA_EXPORT_OBSERVATIONS'}).then(result=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.records,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`采集观察-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(error=>window.alert(errorMessage(error)));}}>导出本地完整观察</button>
       </section> : null}
 
     </main>

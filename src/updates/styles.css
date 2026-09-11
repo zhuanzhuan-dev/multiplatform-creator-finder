@@ -23,3 +23,11 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   li { grid-template-columns: 1fr; gap: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
+
+.current-release { margin-top: 24px; }
+.current-release .lead, .release-history .lead { margin: 16px 20px; }
+.release-history { margin-top: 20px; }
+.release-history details + details { border-top: 1px solid var(--line-soft); }
+.release-history summary { padding: 18px 20px; cursor: pointer; font-weight: 700; }
+.release-history summary span { display: inline-block; margin-left: 14px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.release-history summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -3px; }

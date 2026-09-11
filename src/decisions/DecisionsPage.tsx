@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { useEffect, useRef, useState } from 'react';
 import { decisionMeta, formatLocalDateTime } from '../sidepanel/format';
 import type { Decision } from '../sidepanel/types';
@@ -54,14 +55,14 @@ export function DecisionsPage() {
         <label>轮次<select aria-label="筛选轮次" value={filters.runId} onChange={e=>change({runId:e.target.value})}><option value="">全部轮次</option>{data?.runs.map(run=><option key={run.id} value={run.id}>{formatLocalDateTime(run.startedAt)}</option>)}</select></label>
         <label><span className="visually-hidden">搜索账号或原因</span><input type="search" value={filters.query} placeholder="搜索账号、结果或原因" onChange={e=>change({query:e.target.value})} /></label>
       </div>
-      {error?<p className="empty-state" role="alert">{error}<button onClick={()=>setRevision(r=>r+1)}>重试</button></p>:!data?<p className="empty-state">正在读取记录…</p>:visible.length===0?<p className="empty-state">近 24 小时内没有符合条件的记录。</p>:<div className="table-scroll"><table>
+      {error?<p className="empty-state" role="alert">{errorMessage(error)}<button onClick={()=>setRevision(r=>r+1)}>重试</button></p>:!data?<p className="empty-state">正在读取记录…</p>:visible.length===0?<p className="empty-state">近 24 小时内没有符合条件的记录。</p>:<div className="table-scroll"><table>
         <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
         <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
           <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
           <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
           <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><strong>{decision.accountName || '未识别账号'}</strong></span></td>
           <td data-label="处理结果"><span className={`decision-badge ${meta.tone}`}>{meta.label}</span></td>
-          <td data-label="处理依据" className="reason">{decision.reasons?.join(' · ') || decision.code}</td>
+          <td data-label="处理依据" className="reason">{decision.reasons?.map(errorMessage).join(' · ') || decision.code}</td>
           <td className="row-action">{decision.profileUrl?<a href={decision.profileUrl} target="_blank" rel="noreferrer">查看主页 ↗</a>:<span>—</span>}</td>
         </tr>;})}</tbody>
       </table></div>}

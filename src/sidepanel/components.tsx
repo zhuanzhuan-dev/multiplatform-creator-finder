@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { sourcePlatformLabel } from "../../lib/source-platform.js";
 import { canResumeRun, elapsedRunMs } from "../../lib/run-limits.js";
 import { useState } from "react";
@@ -80,7 +81,7 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
         <button className="danger-secondary" disabled={Boolean(busyAction) || state.status === "idle" || state.status === "stopped"} onClick={onStop}>停止本轮</button>
       </div>
       <details className="health-details">
-        <summary><span className="run-health"><StatusBadge status={state.status} /><span>{health}{state.lastError && !health.includes(state.lastError) ? <span className="health-alert">最近异常：{state.lastError}</span> : null}</span></span><span className="detail-action">查看详情</span></summary>
+        <summary><span className="run-health"><StatusBadge status={state.status} /><span>{errorMessage(health)}{state.lastError && !health.includes(state.lastError) ? <span className="health-alert">最近异常：{errorMessage(state.lastError)}</span> : null}</span></span><span className="detail-action">查看详情</span></summary>
         <dl className="mini-details">
           {state.engagement && (state.engagement.policy.like || state.engagement.policy.collect || state.engagement.policy.follow) ? <>
             <div><dt>本轮互动上限</dt><dd>{state.engagement.policy.rate}% · 已处理 {state.engagement.videos} 条普通视频</dd></div>
@@ -93,7 +94,7 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
           <div><dt>下次定时</dt><dd>{schedule?.enabled ? formatLocalDateTime(schedule.nextRunAt) : "已停用"}</dd></div>
           <div><dt>定时结果</dt><dd>{schedule?.lastResult ? `${formatLocalDateTime(schedule.lastRunAt)}｜${schedule.lastResult}` : "—"}</dd></div>
           <div><dt>暂停原因</dt><dd>{state.pauseReason || "—"}</dd></div>
-          <div><dt>具体错误</dt><dd>{state.lastError || "—"}</dd></div>
+          <div><dt>具体错误</dt><dd>{errorMessage(state.lastError) || "—"}</dd></div>
           <div><dt>运行页面</dt><dd>{backgroundHealth}</dd></div>
         </dl>
       </details>
@@ -116,7 +117,7 @@ export function RecentDecisions({ now, history = [], total = 0 }: { now: number;
               {decision.avatarUrl ? <DecisionAvatar url={decision.avatarUrl} name={decision.accountName} /> : null}
               <div className="decision-copy">
                 <div className="decision-main"><span className="decision-name">{decision.accountName || "未识别账号"}</span><span className={`decision-label ${meta.tone}`}>{meta.label}</span></div>
-                <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.reasons?.length ? decision.reasons.join(" · ") : decision.code || "已完成判断"}</div>
+                <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.reasons?.length ? decision.reasons.map(errorMessage).join(" · ") : decision.code || "已完成判断"}</div>
               </div>
               <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>
             </article>

@@ -1,6 +1,6 @@
 {
   "name": "multiplatform-creator-discovery-extension",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.15.1",
@@ -15,14 +15,15 @@
     "version:patch": "node scripts/bump-version.mjs patch",
     "test": "node --test lib/*.test.js --experimental-strip-types src/core/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm typecheck && pnpm test && pnpm build && node scripts/verify-dist.mjs",
+    "check": "node scripts/generate-release-notes.mjs --check && pnpm typecheck && pnpm test && pnpm build && node scripts/verify-dist.mjs",
     "package": "pnpm check && node scripts/package-extension.mjs",
     "bridge": "node bridge/server.mjs",
     "bridge:install": "node scripts/bridge-service.mjs install",
     "bridge:status": "node scripts/bridge-service.mjs status",
     "bridge:uninstall": "node scripts/bridge-service.mjs uninstall",
     "team:setup": "node scripts/team-setup.mjs",
-    "team:package": "pnpm package"
+    "team:package": "pnpm package",
+    "notes:generate": "node scripts/generate-release-notes.mjs"
   },
   "dependencies": {
     "react": "19.2.8",

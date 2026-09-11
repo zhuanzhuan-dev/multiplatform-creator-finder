@@ -1,3 +1,4 @@
+import { errorMessage } from '../shared/error-message';
 import { useEffect, useRef, useState } from 'react';
 import { LAUNCHER_ENABLED_KEY, LAUNCHER_COMPACT_KEY, launcherSiteKey, launcherPreferences } from '../../lib/launcher-preferences.js';
 
@@ -85,6 +86,6 @@ export function LauncherSettings() {
       {visitHidden ? <button disabled={busy} onClick={() => void action(() => setVisit(false), '本次隐藏已取消；全局与网站设置仍生效')}>取消本次隐藏</button> : null}
     </div>
     <p className="field-note">隐藏后可点击浏览器工具栏的插件图标，在“设置”中恢复。隐藏仅改变入口显示，采集任务继续运行。</p>
-    <p className="field-note" role="status">{notice}</p>
+    <p className="field-note" role="status">{errorMessage(notice)}</p>
   </section>;
 }
