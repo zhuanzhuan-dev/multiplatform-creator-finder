@@ -6,6 +6,7 @@ import { NumberInput, inputNumber } from "../shared/NumberInput";
 import { decisionMeta, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
 import { RadarDisplay } from "./RadarDisplay";
 import type { CategoryRule, Decision, CloudState, RuleSettings, RunState, SettingsDraft, Snapshot, Stats } from "./types";
+import { AccountVideosControl } from "../shared/AccountVideosControl";
 
 const STATUS_LABELS: Record<string, string> = {
   idle: "未启动",
@@ -113,13 +114,19 @@ export function RecentDecisions({ now, history = [], total = 0 }: { now: number;
         {decisions.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : visibleDecisions.map((decision, index) => {
           const meta = decisionMeta(decision.code);
           return (
-            <article className="decision-row" key={`${decision.occurredAt || "decision"}-${index}`}>
-              {decision.avatarUrl ? <DecisionAvatar url={decision.avatarUrl} name={decision.accountName} /> : null}
-              <div className="decision-copy">
-                <div className="decision-main"><span className="decision-name">{decision.accountName || "未识别账号"}</span><span className={`decision-label ${meta.tone}`}>{meta.label}</span></div>
-                <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.reasons?.length ? decision.reasons.map(errorMessage).join(" · ") : decision.code || "已完成判断"}</div>
+            <article className="decision-entry" key={`${decision.occurredAt || "decision"}-${index}`}>
+              <div className="decision-row">
+                {decision.avatarUrl ? <DecisionAvatar url={decision.avatarUrl} name={decision.accountName} /> : null}
+                <div className="decision-copy">
+                  <div className="decision-main">
+                    <span className="decision-name">{decision.accountName || "未识别账号"}</span>
+                    <span className={`decision-label ${meta.tone}`}>{meta.label}</span>
+                    <AccountVideosControl decision={decision} now={now} />
+                  </div>
+                  <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.reasons?.length ? decision.reasons.map(errorMessage).join(" · ") : decision.code || "已完成判断"}</div>
+                </div>
+                <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>
               </div>
-              <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>
             </article>
           );
         })}
@@ -213,7 +220,7 @@ interface SettingsPanelProps {
   saveStatus: string;
 }
 
-export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, recommendationPlatform="douyin" }: SettingsPanelProps & {recommendationPlatform?: "douyin" | "kuaishou"}) {
+export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, recommendationPlatform="douyin" }: SettingsPanelProps & {recommendationPlatform?: "douyin" | "kuaishou" | "bilibili"}) {
   const number = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, [key]: inputNumber(event.target.value) });
   };
@@ -245,7 +252,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
   return (
     <div className="settings-disclosure">
       <div className="disclosure-body">
-        <section className="setting-group" aria-labelledby="dwellSettingTitle">
+        {recommendationPlatform === "bilibili" ? null : <section className="setting-group" aria-labelledby="dwellSettingTitle">
           <div className="setting-heading"><strong id="dwellSettingTitle">单条停留</strong><span>通过筛选的视频按此停留，淘汰内容、图文和直播快速跳过</span></div>
           <div className="segmented" aria-label="停留模式">
             <button className={draft.dwellMode === "fixed" ? "selected" : ""} disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "fixed" })}>固定时长</button>
@@ -262,7 +269,17 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
           )}
           <button className="preset-button" disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "range", dwellMinSeconds: 10, dwellTypicalSeconds: 20, dwellMaxSeconds: 30 })}>应用随机预设</button>
           <p className="field-note">随机区间采用截断正态分布，在上下限之间连续取值，多数接近中心。默认 10–30 秒、中心 20 秒；随机节奏无法保证避免平台风控。</p>
-        </section>
+        </section>}
+
+        {recommendationPlatform==='bilibili' ? <section className="setting-group" aria-labelledby="bilibiliBatchTitle">
+          <div className="setting-heading"><strong id="bilibiliBatchTitle">批间间隔</strong><span>一次拉一整页（热门约 20 / 推荐约 30），页内连续处理；仅在请求下一批前等待</span></div>
+          <div className="form-grid">
+            <label>最短（秒）<NumberInput min="1" max="300" value={draft.bilibiliBatchMinSeconds} disabled={disabled} onChange={number("bilibiliBatchMinSeconds")} /></label>
+            <label>最长（秒）<NumberInput min="1" max="300" value={draft.bilibiliBatchMaxSeconds} disabled={disabled} onChange={number("bilibiliBatchMaxSeconds")} /></label>
+          </div>
+          <button className="preset-button" disabled={disabled} onClick={() => onChange({ ...draft, bilibiliBatchMinSeconds: 5, bilibiliBatchMaxSeconds: 12 })}>应用默认 5–12 秒</button>
+          <p className="field-note">B 站是接口批采，不会按单条故意等待。批间间隔用于降低连续翻页压力，无法保证绝对安全。</p>
+        </section> : null}
 
         <section className="setting-group" aria-labelledby="targetSettingTitle">
           <div className="setting-heading"><strong id="targetSettingTitle">任务目标</strong><span>达到任一启用条件即停止</span></div>
@@ -323,8 +340,8 @@ function terms(value: string): string[] {
   return [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
 }
 
-export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engagement }: AdvancedRulesPanelProps) {
-  const setHard = (key: keyof RuleSettings["hard"]) => (event: React.ChangeEvent<HTMLInputElement>) => {
+export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engagement, variant="default" }: AdvancedRulesPanelProps & {variant?: "default" | "bilibili"}) {
+  const setHard = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, hard: { ...draft.hard, [key]: inputNumber(event.target.value) } });
   };
   const setLowFollower = (key: keyof RuleSettings["lowFollowerNewAccount"], value: number | "" | boolean) => {
@@ -355,6 +372,62 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
       }]
     });
   };
+  const termsList = (value: string) => [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
+
+  if (variant === "bilibili") {
+    const hard = draft.hard as RuleSettings["hard"] & {
+      minPlays?: number | "";
+      rejectPlaysBelow?: number | "";
+      earlyPlayWindowDays?: number | "";
+    };
+    return (
+      <div className="rules-disclosure">
+        <div className="disclosure-body rules-form">
+          <section className="setting-group" aria-labelledby="hardRulesTitle">
+            <div className="setting-heading"><strong id="hardRulesTitle">B站准入门槛</strong><span>以播放量与时长为主，不使用抖音点赞逻辑</span></div>
+            <div className="form-grid">
+              <label>最短时长（秒）<NumberInput min="1" value={hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
+              <label>准入播放量<NumberInput min="0" value={hard.minPlays ?? 100000} disabled={disabled} onChange={setHard("minPlays")} /></label>
+              <label>直接剔除低于<NumberInput min="0" value={hard.rejectPlaysBelow ?? 10000} disabled={disabled} onChange={setHard("rejectPlaysBelow")} /></label>
+              <label>早期窗口（天）<NumberInput min="1" value={hard.earlyPlayWindowDays ?? 3} disabled={disabled} onChange={setHard("earlyPlayWindowDays")} /></label>
+            </div>
+            <p className="field-note">默认：时长≥60秒；发布后窗口内播放≥10万才准入；播放&lt;1万直接剔除。弹幕不作核心条件，评论量仅作参考。</p>
+            <label className="check"><input type="checkbox" checked={draft.includeDigital === true} disabled={disabled} onChange={(event) => onChange({ ...draft, includeDigital: event.target.checked })} />纳入数码类（贴片合作需要时再开）</label>
+          </section>
+          <section className="setting-group" aria-labelledby="excludeRulesTitle">
+            <div className="setting-heading"><strong id="excludeRulesTitle">特殊内容剔除</strong><span>纯动漫/电影等无合作价值内容</span></div>
+            <label>分区名黑名单<textarea rows={2} value={(draft.excludeTnames as string[] || []).join("、")} disabled={disabled} onChange={(event) => onChange({ ...draft, excludeTnames: termsList(event.target.value) })} /></label>
+            <label>标题关键词黑名单<textarea rows={3} value={(draft.contentBlacklist as string[] || []).join("、")} disabled={disabled} onChange={(event) => onChange({ ...draft, contentBlacklist: termsList(event.target.value) })} /></label>
+          </section>
+          <section className="setting-group" aria-labelledby="categoryRulesTitle">
+            <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
+            {engagement}
+            <div className="category-list">
+              {draft.positiveCategories.map((category, index) => (
+                <details className="category-editor" key={category.id}>
+                  <summary>
+                    <span className={`category-dot ${category.enabled === false ? "off" : ""}`} aria-hidden="true" />
+                    <span><strong>{category.name}</strong><small>{category.keywords.length} 个关键词 · +{category.score} 分</small></span>
+                  </summary>
+                  <div className="category-fields">
+                    <label className="check"><input type="checkbox" checked={category.enabled !== false} disabled={disabled} onChange={(event) => updateCategory(index, { enabled: event.target.checked })} />启用这个类目</label>
+                    <div className="form-grid">
+                      <label>类目名称<input type="text" value={category.name} disabled={disabled} onChange={(event) => updateCategory(index, { name: event.target.value })} /></label>
+                      <label>命中加分<NumberInput min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: inputNumber(event.target.value) })} /></label>
+                    </div>
+                    <label>关键词<textarea rows={3} value={category.keywords.join("、")} disabled={disabled} onChange={(event) => updateCategory(index, { keywords: termsList(event.target.value) })} /></label>
+                    <button className="danger-text compact category-remove" disabled={disabled || draft.positiveCategories.length <= 1} onClick={() => removeCategory(index)}>删除这个类目</button>
+                  </div>
+                </details>
+              ))}
+            </div>
+            <button className="add-category" disabled={disabled} onClick={addCategory}>＋ 添加内容类别</button>
+          </section>
+          <div className="form-actions"><button disabled={disabled} onClick={onSave}>保存 B 站规则</button></div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rules-disclosure">

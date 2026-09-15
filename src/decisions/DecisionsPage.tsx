@@ -1,8 +1,9 @@
 import { errorMessage } from '../shared/error-message';
 import { useEffect, useRef, useState } from 'react';
-import { decisionMeta, formatLocalDateTime } from '../sidepanel/format';
+import { decisionMeta, decisionMetricLine, formatLocalDateTime } from '../sidepanel/format';
 import type { Decision } from '../sidepanel/types';
 import { sendRuntime } from '../shared/chrome-runtime';
+import { AccountVideosControl } from '../shared/AccountVideosControl';
 import { SOURCE_PLATFORMS, sourcePlatformLabel } from '../../lib/source-platform.js';
 
 type Cursor = {at:number;id:string} | null;
@@ -22,9 +23,10 @@ export function DecisionsPage() {
   const [revision,setRevision]=useState(0);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
+  const [now,setNow]=useState(Date.now());
   const sequence=useRef(0);
   useEffect(()=>{
-    const refresh=()=>{if(document.visibilityState==='visible')setRevision(r=>r+1);};
+    const refresh=()=>{if(document.visibilityState==='visible'){setRevision(r=>r+1);setNow(Date.now());}};
     const listener=(message:{type?:string})=>{if(message.type==='DRA_HISTORY_CHANGED')refresh();};
     chrome.runtime.onMessage.addListener(listener);
     document.addEventListener('visibilitychange',refresh);
@@ -45,7 +47,7 @@ export function DecisionsPage() {
   const counts=data?.counts || {good:0,review:0,reject:0};
   const visible=data?.items || [];
   return <main>
-    <header className="page-header"><div><p className="eyebrow">DISCOVERY / HISTORY</p><h1>近 24 小时记录</h1><p className="subtitle">从当前时间往前推 24 小时，跨轮次保留；每页 50 条，到期自动清理。</p></div><span className="run-status">本机历史</span></header>
+    <header className="page-header"><div><p className="eyebrow">DISCOVERY / HISTORY</p><h1>近 24 小时记录</h1><p className="subtitle">从当前时间往前推 24 小时，跨轮次保留；每页 50 条，到期自动清理。点「视频」可查看该账号采集到的播放/时长/点赞/收藏等。</p></div><span className="run-status">本机历史</span></header>
     <section className="decision-rail" aria-label="处理结果汇总">
       {[['','全部记录',counts.good+counts.review+counts.reject],['good','符合条件',counts.good],['review','需人工确认',counts.review],['reject','淘汰与跳过',counts.reject]].map(([tone,label,count])=><button key={tone} className={`${tone} ${filters.tone===tone?'selected':''}`} onClick={()=>change({tone:String(tone)})}><span>{label}</span><strong>{count}</strong></button>)}
     </section>
@@ -56,11 +58,18 @@ export function DecisionsPage() {
         <label><span className="visually-hidden">搜索账号或原因</span><input type="search" value={filters.query} placeholder="搜索账号、结果或原因" onChange={e=>change({query:e.target.value})} /></label>
       </div>
       {error?<p className="empty-state" role="alert">{errorMessage(error)}<button onClick={()=>setRevision(r=>r+1)}>重试</button></p>:!data?<p className="empty-state">正在读取记录…</p>:visible.length===0?<p className="empty-state">近 24 小时内没有符合条件的记录。</p>:<div className="table-scroll"><table>
-        <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
+        <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>视频</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
         <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
           <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
           <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
           <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><strong>{decision.accountName || '未识别账号'}</strong></span></td>
+          <td data-label="视频" className="video-cell">
+            <div className="video-summary">
+              <strong>{decision.caption || decision.videoId || '—'}</strong>
+              <span>{decisionMetricLine(decision)}</span>
+            </div>
+            <AccountVideosControl decision={decision} now={now} />
+          </td>
           <td data-label="处理结果"><span className={`decision-badge ${meta.tone}`}>{meta.label}</span></td>
           <td data-label="处理依据" className="reason">{decision.reasons?.map(errorMessage).join(' · ') || decision.code}</td>
           <td className="row-action">{decision.profileUrl?<a href={decision.profileUrl} target="_blank" rel="noreferrer">查看主页 ↗</a>:<span>—</span>}</td>

@@ -1,4 +1,6 @@
 import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './lib/kuaishou-task.js';
+import { createBilibiliRuntime, BILIBILI_ALARM, BILIBILI_STOP_ALARM } from './lib/bilibili-task.js';
+import { mergeBilibiliRules, validateBilibiliRules } from './lib/bilibili-rules.js';
 import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, observationRecord as feiguaObservationRecord, observationStatus, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
@@ -51,8 +53,11 @@ let settings = mergeSettings();
 let rules = mergeRules();
 let settingsDraft = null;
 let kuaishouConfig = {settings:mergeSettings(),rules:mergeRules(),settingsDraft:null};
+let bilibiliConfig = {settings:mergeSettings(),rules:mergeBilibiliRules(),settingsDraft:null};
 function configurationFor(platform) {
-  return platform === "kuaishou" ? kuaishouConfig : {settings,rules,settingsDraft};
+  if (platform === "kuaishou") return kuaishouConfig;
+  if (platform === "bilibili") return bilibiliConfig;
+  return {settings,rules,settingsDraft};
 }
 let configQueue = Promise.resolve();
 let seenVideos = [];
@@ -101,7 +106,27 @@ const kuaishou = createKuaishouRuntime({
     await persistWorkData();
   }
 });
-function taskForSession(sessionId) { return [state,kuaishou.state(),feigua.state()].find(task=>task.runId===sessionId); }
+const bilibili = createBilibiliRuntime({
+  settings:()=>bilibiliConfig.settings,rules:()=>bilibiliConfig.rules,authorize:checkCloudConnection,
+  ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
+  persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload,recordDecision,
+  recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
+  collect:async(observation,profile,decision,owner)=>{
+    reserveQueue(1);
+    await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'bilibili',accountPlatform:'bilibili'}]);
+    const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
+      dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
+      action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons}});
+    payload.comment_count=observation.comments ?? null;payload.favorite_count=observation.favorites ?? null;
+    Object.assign(payload.rpa_feedback,{source:observation.feedSurface==='popular'?'bilibili-popular':'bilibili-web-recommend',account_platform:'bilibili',bilibili_mid:observation.authorId,
+      bilibili_bvid:observation.videoId || '',no_profile_navigation:true,review_required:Boolean(decision.needsReview),
+      play_count:observation.plays ?? null,comment_count:observation.comments ?? null,danmaku_count:observation.danmaku ?? null,
+      tname:observation.tname || '',feed_surface:observation.feedSurface || 'recommend',rcmd_reason:observation.rcmdReason || ''});
+    addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner});
+    await persistWorkData();
+  }
+});
+function taskForSession(sessionId) { return [state,kuaishou.state(),bilibili.state(),feigua.state()].find(task=>task.runId===sessionId); }
 function incrementForSession(sessionId,key,amount=1) {
   const owner=taskForSession(sessionId); if(owner) owner.stats[key]=Number(owner.stats[key]||0)+amount;
 }
@@ -112,23 +137,35 @@ function reserveQueue(count) {
   let excess=Math.max(0,outbox.length+count-MAX_OUTBOX);
   outbox=outbox.filter(item=>{if(excess && settled.has(item.status)){excess--;return false;}return true;});
 }
-function aggregateState() { return aggregateTaskState([state,kuaishou.state(),feigua.state()]); }
+function aggregateState() { return aggregateTaskState([state,kuaishou.state(),bilibili.state(),feigua.state()]); }
 function syncPower() {
-  if (kuaishou.active() && kuaishou.state().runSettings?.keepSystemAwake || isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
+  if (kuaishou.active() && kuaishou.state().runSettings?.keepSystemAwake || bilibili.active() && bilibili.state().runSettings?.keepSystemAwake || isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
   else chrome.power.releaseKeepAwake();
 }
 function douyinTaskSnapshot() {
   // Page selection must work before the first run has persisted a route.
   return state.route ? state : {...state,route:{platform:'douyin',surface:'recommend',label:'抖音推荐'}};
 }
+function bilibiliTaskView(selection) {
+  const task = bilibili.state();
+  const wantPopular = selection === 'bilibili-popular';
+  const surface = wantPopular ? 'popular' : 'recommend';
+  const label = wantPopular ? 'B站综合热门' : 'B站首页推荐';
+  if (task.route?.surface === surface || !['starting','running','paused'].includes(task.status)) {
+    return {...task, route:{platform:'bilibili', surface, label}};
+  }
+  return {...task};
+}
 async function selectedTask(tabId,platform) {
   if(platform==='kuaishou') return kuaishou.state();
+  if(platform==='bilibili' || platform==='bilibili-popular') return bilibiliTaskView(platform);
   if(platform==='feigua') return feigua.state();
   if(platform==='douyin' || !Number.isInteger(tabId)) return douyinTaskSnapshot();
   const tab=Number.isInteger(tabId)?await chrome.tabs.get(tabId).catch(()=>null):null;
   const route=resolveRoute(tab?.pendingUrl || tab?.url || '');
   if(route?.platform==='feigua') return feigua.state();
   if(route?.platform==='kuaishou') return kuaishou.state();
+  if(route?.platform==='bilibili') return bilibili.state();
   if(route?.platform==='douyin')return douyinTaskSnapshot();
   return stateSnapshotForTab(tabId);
 }
@@ -156,7 +193,7 @@ function isRecommendationFeedUrl(value) {
 async function initialize() {
   if (initialized) return initialized;
   initialized = (async () => {
-    const saved = await chrome.storage.local.get([...Object.values(STORAGE_KEYS),"draFeiguaBrowsing","draKuaishou","draKuaishouConfig"]);
+    const saved = await chrome.storage.local.get([...Object.values(STORAGE_KEYS),"draFeiguaBrowsing","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliConfig"]);
     browseState={...browseState,...saved.draFeiguaBrowsing};
     const savedRules = saved[STORAGE_KEYS.rules] || {};
     const savedRulesVersion = Number(savedRules.version || 0);
@@ -170,6 +207,13 @@ async function initialize() {
       settingsDraft:previousKuaishou?.settingsDraft || null
     };
     await chrome.storage.local.set({draKuaishouConfig:kuaishouConfig});
+    const previousBilibili = saved.draBilibiliConfig;
+    bilibiliConfig = {
+      settings:mergeSettings(previousBilibili?.settings || saved.draBilibili?.state?.runSettings || settings),
+      rules:mergeBilibiliRules(previousBilibili?.rules || saved.draBilibili?.state?.runRules || {}),
+      settingsDraft:previousBilibili?.settingsDraft || null
+    };
+    await chrome.storage.local.set({draBilibiliConfig:bilibiliConfig});
     dailyStats = saved[STORAGE_KEYS.dailyStats] || null;
     const savedState = saved[STORAGE_KEYS.state] || {};
     state = {
@@ -200,6 +244,7 @@ async function initialize() {
       : {};
     feigua.restore(saved);
     kuaishou.restore(saved);
+    bilibili.restore(saved);
     if (savedState.route?.platform === "feigua") state = cloneInitialState();
     outbox = Array.isArray(saved[STORAGE_KEYS.outbox]) ? saved[STORAGE_KEYS.outbox] : [];
     await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
@@ -230,6 +275,7 @@ async function initialize() {
     });
     await feigua.timers();
     await kuaishou.timers();
+    await bilibili.timers();
     await updateTaskIndicators();
     await syncScheduleAlarm();
     await syncRunStopAlarm();
@@ -323,6 +369,7 @@ async function persistWorkData() {
     [STORAGE_KEYS.outbox]: outbox,
     ...feigua.storage(),
     ...kuaishou.storage(),
+    ...bilibili.storage(),
     [STORAGE_KEYS.cloudAuth]: cloudAuth,
     [STORAGE_KEYS.pairing]: pairing
   });
@@ -344,6 +391,10 @@ function increment(name, amount = 1) {
 }
 
 function recordDecision(decision = {}, observation = {}, profile = null, owner = state) {
+  const num = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
   const entry = {
     id: crypto.randomUUID(),
     runId: owner.runId || "",
@@ -354,6 +405,18 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
     avatarUrl: profile?.avatarUrl || observation.avatarUrl || decision.avatarUrl || "",
     profileUrl: profile?.profileUrl || observation.profileUrl || decision.profileUrl || "",
+    authorId: String(observation.authorId || profile?.bilibiliMid || profile?.secUid || ""),
+    videoId: String(observation.videoId || ""),
+    caption: String(observation.caption || observation.title || ""),
+    coverUrl: String(observation.coverUrl || ""),
+    beforeUrl: String(observation.beforeUrl || ""),
+    durationSeconds: num(observation.durationSeconds),
+    plays: num(observation.plays),
+    likes: num(observation.likes),
+    favorites: num(observation.favorites),
+    comments: num(observation.comments),
+    danmaku: num(observation.danmaku),
+    shares: num(observation.shares),
     occurredAt: new Date().toISOString()
   };
   owner.lastDecision = entry;
@@ -953,6 +1016,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     if (cloudAuth) cloudAuth.expired = true;
     await persistCloudAuth();
     if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
+    if(bilibili.active() && !bilibili.state().runSettings?.dryRun)await bilibili.pause("研究台授权已失效，请重新连接");
     if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
     if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     state.lastError = "研究台授权已失效，请重新连接";
@@ -1008,6 +1072,7 @@ async function checkCloudConnection() {
     cloudAuth.expired = true;
     await persistCloudAuth();
     if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
+    if(bilibili.active() && !bilibili.state().runSettings?.dryRun)await bilibili.pause("研究台授权已失效，请重新连接");
     if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
     if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     else await persistState();
@@ -1081,6 +1146,7 @@ async function pollPairing() {
 
 async function disconnectCloud() {
   if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
+  if(bilibili.active() && !bilibili.state().runSettings?.dryRun)await bilibili.pause("研究台授权已失效，请重新连接");
   if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台已断开，请重新连接后继续");
   if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台已断开，请登录并连接后继续");
   cloudAuth = cloudAuth?.host_fingerprint ? { host_fingerprint: cloudAuth.host_fingerprint } : null;
@@ -1339,32 +1405,38 @@ async function handlePanelSkipped(observation, reason) {
 
 async function saveConfiguration(message) {
   const platform = message.platform || 'douyin';
-  if (!['douyin','kuaishou','feigua'].includes(platform)) throw new Error('请选择具体平台后修改设置');
-  const current = configurationFor(platform);
-  const active = platform === 'kuaishou' ? kuaishou.active() : platform === 'feigua' ? feigua.active() : isActiveRunStatus();
-  if (active && (message.settings && JSON.stringify(mergeSettings(message.settings)) !== JSON.stringify(current.settings) || message.rules && JSON.stringify(mergeRules(message.rules)) !== JSON.stringify(current.rules))) throw new Error('请先暂停当前平台任务再修改设置');
+  if (!['douyin','kuaishou','bilibili','bilibili-popular','feigua'].includes(platform)) throw new Error('请选择具体平台后修改设置');
+  const configPlatform = platform === 'bilibili-popular' ? 'bilibili' : platform;
+  const current = configurationFor(configPlatform);
+  const active = configPlatform === 'kuaishou' ? kuaishou.active() : configPlatform === 'bilibili' ? bilibili.active() : configPlatform === 'feigua' ? feigua.active() : isActiveRunStatus();
+  const mergeRuleFn = configPlatform === 'bilibili' ? mergeBilibiliRules : mergeRules;
+  const validateRuleFn = configPlatform === 'bilibili' ? validateBilibiliRules : validateRules;
+  if (active && (message.settings && JSON.stringify(mergeSettings(message.settings)) !== JSON.stringify(current.settings) || message.rules && JSON.stringify(mergeRuleFn(message.rules)) !== JSON.stringify(current.rules))) throw new Error('请先暂停当前平台任务再修改设置');
   const nextSettings = mergeSettings(message.settings || current.settings);
-  const nextRules = mergeRules(message.rules || current.rules);
+  const nextRules = mergeRuleFn(message.rules || current.rules);
   // Recommendation forms do not own Feigua-only fields.
-  if (platform === 'douyin') {
+  if (configPlatform === 'douyin') {
     for (const key of Object.keys(current.settings).filter(key=>key.startsWith('feigua'))) nextSettings[key]=current.settings[key];
     nextRules.feiguaKeywords=current.rules.feiguaKeywords;
   }
-  const problems = [...validateSettings(nextSettings), ...validateRules(nextRules), ...validateSchedule(nextSettings.schedule)];
+  const problems = [...validateSettings(nextSettings), ...validateRuleFn(nextRules), ...validateSchedule(nextSettings.schedule)];
   if (problems.length && !message.saveDraft) throw new Error(problems.join('；'));
   const next = problems.length ? {...current,settingsDraft:nextSettings} : {
     settings:nextSettings,rules:nextRules,settingsDraft:message.settings ? null : current.settingsDraft
   };
-  if (platform === 'kuaishou') {
+  if (configPlatform === 'kuaishou') {
     await chrome.storage.local.set({draKuaishouConfig:next});
     kuaishouConfig = next;
+  } else if (configPlatform === 'bilibili') {
+    await chrome.storage.local.set({draBilibiliConfig:next});
+    bilibiliConfig = next;
   } else {
     const scheduleChanged = JSON.stringify(settings.schedule) !== JSON.stringify(next.settings.schedule);
     await chrome.storage.local.set({[STORAGE_KEYS.settings]:next.settings,[STORAGE_KEYS.rules]:next.rules,[STORAGE_KEYS.settingsDraft]:next.settingsDraft});
     settings=next.settings; rules=next.rules; settingsDraft=next.settingsDraft;
     if (scheduleChanged) await syncScheduleAlarm();
   }
-  return {ok:true,configPlatform:platform,...next,problems};
+  return {ok:true,configPlatform:configPlatform,...next,problems};
 }
 
 async function startRun({ trigger = "manual", scheduledFor = null, tabId = null } = {}) {
@@ -1719,6 +1791,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     initialize().then(()=>cleanupDecisions()).then(()=>chrome.runtime.sendMessage({type:"DRA_HISTORY_CHANGED"})).catch(()=>undefined);
   }
   if ([KUAISHOU_ALARM,KUAISHOU_STOP_ALARM].includes(alarm.name)) initialize().then(()=>kuaishou.inspect()).catch(error=>kuaishou.pause(error.message));
+  if ([BILIBILI_ALARM,BILIBILI_STOP_ALARM].includes(alarm.name)) initialize().then(()=>bilibili.inspect()).catch(error=>bilibili.pause(error.message));
   if ([FEIGUA_ALARM, FEIGUA_STOP_ALARM].includes(alarm.name)) initialize().then(()=>feigua.inspect()).catch(error=>feigua.pause(error.message));
   if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
@@ -1742,6 +1815,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedDebuggerTabs.delete(tabId);
   if (tabId === kuaishou.state().feedTabId && kuaishou.active()) void kuaishou.pause("快手标签页已关闭");
+  if (tabId === bilibili.state().feedTabId && bilibili.active()) void bilibili.pause("B站标签页已关闭");
   if (tabId === feigua.state().feedTabId && feigua.active()) void feigua.pause("飞瓜标签页已关闭");
   if (tabId === state.feedTabId && isActiveRunStatus()) setPaused("当前运行标签页已关闭").catch(() => undefined);
 });
@@ -1751,6 +1825,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url || tab.pendingUrl || "";
   if (resolveRoute(url)?.platform==='feigua' && /#\/(video-detail|blogger-detail)\//.test(url) && feigua.active()) void feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
   if (tabId === kuaishou.state().feedTabId && kuaishou.active() && (changeInfo.url || changeInfo.status === "complete")) void kuaishou.inspect();
+  if (tabId === bilibili.state().feedTabId && bilibili.active() && (changeInfo.url || changeInfo.status === "complete")) void bilibili.inspect();
   if (tabId === feigua.state().feedTabId && feigua.active() && (changeInfo.url || changeInfo.status === "complete")) void feigua.inspect();
   if (tabId === state.feedTabId && state.status === "running" && changeInfo.status === "complete") {
     watchdog().catch((error) => setPaused("刷新后恢复失败", error.message));
@@ -1802,7 +1877,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Call immediately in the user gesture, before storage/auth initialization.
   if (message?.type === "DRA_OPEN_PANEL") {
     if (!sender.tab || (sender.frameId ?? 0) !== 0 || !/^https?:\/\//.test(sender.url || "")) { sendResponse({ ok:false }); return false; }
-    if (['douyin','kuaishou','feigua'].includes(message.platform)) pendingPanelSelections.set(sender.tab.windowId,message.platform);
+    if (['douyin','kuaishou','bilibili','bilibili-popular','feigua'].includes(message.platform)) pendingPanelSelections.set(sender.tab.windowId,message.platform);
     chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(() => {
       chrome.runtime.sendMessage({type:'DRA_PANEL_SELECTION_CHANGED',windowId:sender.tab.windowId}).catch(()=>undefined);
       sendResponse({ok:true});
@@ -1812,9 +1887,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     await initialize();
     if (sender.tab?.id === kuaishou.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_KUAISHOU_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return kuaishou.message(message,sender);
+    if (sender.tab?.id === bilibili.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_BILIBILI_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return bilibili.message(message,sender);
     if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
     if (['DRA_PAUSE','DRA_STOP','DRA_RESUME'].includes(message?.type) && message.runId) {
-      const target = message.platform === 'kuaishou' ? kuaishou.state() : message.platform === 'feigua' ? feigua.state() : state;
+      const target = message.platform === 'kuaishou' ? kuaishou.state() : (message.platform === 'bilibili' || message.platform === 'bilibili-popular') ? bilibili.state() : message.platform === 'feigua' ? feigua.state() : state;
       if (message.runId !== target.runId) throw Error('任务已变化，请刷新状态后重试');
     }
     switch (message?.type) {
@@ -1929,7 +2005,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return {
           ok: true,
           state: selectedState,
-          tasks: [douyinTaskSnapshot(), kuaishou.state(), feigua.state()],
+          tasks: [douyinTaskSnapshot(), kuaishou.state(), bilibili.state(), feigua.state()],
           feigua: {
             pageCount:feigua.collection()?.pages?.length || 0,
             pageNumber:feigua.state().lastPageNumber || '',
@@ -1993,6 +2069,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_START": {
         const tab = await chrome.tabs.get(message.tabId);
         if(message.platform==='kuaishou' || message.platform==='auto' && resolveRoute(tab.pendingUrl || tab.url || '')?.platform==='kuaishou')return {ok:true,state:await kuaishou.start({tabId:tab.id,windowId:tab.windowId})};
+        if(message.platform==='bilibili' || message.platform==='bilibili-popular'){
+          const surface = message.platform==='bilibili-popular' || resolveRoute(tab.pendingUrl || tab.url || '')?.surface==='popular' ? 'popular' : 'recommend';
+          return {ok:true,state:await bilibili.start({tabId:tab.id,windowId:tab.windowId,surface})};
+        }
+        if(message.platform==='auto' && resolveRoute(tab.pendingUrl || tab.url || '')?.platform==='bilibili'){
+          const surface = resolveRoute(tab.pendingUrl || tab.url || '')?.surface==='popular' ? 'popular' : 'recommend';
+          return {ok:true,state:await bilibili.start({tabId:tab.id,windowId:tab.windowId,surface})};
+        }
         if (message.platform === 'feigua') {
           const destination=await feigua.openPage({windowId:tab.windowId});
           return {ok:true,state:await feigua.start(destination.id)};
@@ -2004,9 +2088,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "DRA_RESUME":
         if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.resume({windowId:message.windowId})};
+        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibili.resume({windowId:message.windowId})};
         return { ok: true, state: message.platform === "feigua" ? await feigua.resume({windowId:message.windowId}) : await resumeRun({ windowId: message.windowId }) };
       case "DRA_PAUSE":
         if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.pause()};
+        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibili.pause()};
         if (message.platform === "feigua") return {ok:true,state:await feigua.pause()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
         await setPaused("用户暂停");
@@ -2014,6 +2100,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, state };
       case "DRA_STOP":
         if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.stop()};
+        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibili.stop()};
         if (message.platform === "feigua") return {ok:true,state:await feigua.stop()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");
         return { ok: true, state: await stopRun() };
@@ -2066,9 +2153,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         else await persistState();
         return { ok: true };
       case "DRA_CLEAR_LOCAL_DATA":
-        if (isActiveRunStatus() || kuaishou.active() || feigua.active() || feigua.collection() && !feigua.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
+        if (isActiveRunStatus() || kuaishou.active() || bilibili.active() || feigua.active() || feigua.collection() && !feigua.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
         feigua.clear();
         kuaishou.clear();
+        bilibili.clear();
         seenVideos = [];
         creatorIndex = {};
         outbox = [];

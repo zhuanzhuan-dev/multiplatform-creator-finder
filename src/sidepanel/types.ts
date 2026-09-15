@@ -26,6 +26,18 @@ export interface Decision {
   accountName?: string;
   avatarUrl?: string;
   profileUrl?: string;
+  authorId?: string;
+  videoId?: string;
+  caption?: string;
+  coverUrl?: string;
+  beforeUrl?: string;
+  durationSeconds?: number | null;
+  plays?: number | null;
+  likes?: number | null;
+  favorites?: number | null;
+  comments?: number | null;
+  danmaku?: number | null;
+  shares?: number | null;
   occurredAt?: string;
 }
 
@@ -93,6 +105,7 @@ export interface ScheduleSettings {
 export interface Settings {
   feiguaTarget?: { maxPages?: number };
   feiguaDelay?: { minSeconds: number; maxSeconds: number };
+  bilibiliBatchDelay?: { minSeconds: number; maxSeconds: number };
   feiguaUploadEnabled?: boolean;
   engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
   dwell?: DwellPolicy;
@@ -150,6 +163,8 @@ export interface SettingsDraft {
   dwellMinSeconds: number | "";
   dwellTypicalSeconds: number | "";
   dwellMaxSeconds: number | "";
+  bilibiliBatchMinSeconds: number | "";
+  bilibiliBatchMaxSeconds: number | "";
   targetMode: TargetMode;
   targetDurationMinutes: number | "";
   targetMaxItems: number | "";
@@ -177,6 +192,8 @@ export function settingsDraft(settings: EditableNumbers<Settings> = {}): Setting
     dwellMinSeconds: settings.dwell?.minSeconds ?? 10,
     dwellTypicalSeconds: settings.dwell?.typicalSeconds ?? 20,
     dwellMaxSeconds: settings.dwell?.maxSeconds ?? 30,
+    bilibiliBatchMinSeconds: settings.bilibiliBatchDelay?.minSeconds ?? 5,
+    bilibiliBatchMaxSeconds: settings.bilibiliBatchDelay?.maxSeconds ?? 12,
     targetMode: settings.target?.mode ?? "both",
     targetDurationMinutes: settings.target?.durationMinutes ?? 60,
     targetMaxItems: settings.target?.maxItems ?? 100,
@@ -205,13 +222,18 @@ export interface CategoryRule {
 
 export interface RuleSettings {
   version?: number;
+  platform?: string;
   includeLive: boolean;
+  includeDigital?: boolean;
   hard: {
     minVideoDurationSeconds: number | "";
     minVideoLikes: number | "";
     preferredVideoLikes: number | "";
     minFollowers: number | "";
     maxFollowers: number | "";
+    minPlays?: number | "";
+    rejectPlaysBelow?: number | "";
+    earlyPlayWindowDays?: number | "";
   };
   lowFollowerNewAccount: {
     enabled: boolean;
@@ -221,6 +243,8 @@ export interface RuleSettings {
   };
   positiveCategories: CategoryRule[];
   gameBlacklist: string[];
+  contentBlacklist?: string[];
+  excludeTnames?: string[];
   feiguaKeywords: string[];
   riskGroups?: unknown[];
   [key: string]: unknown;
@@ -249,39 +273,48 @@ const FALLBACK_RULES: RuleSettings = {
 };
 
 export function rulesDraft(value: unknown): RuleSettings {
-  const source = value && typeof value === "object" ? value as Partial<RuleSettings> : {};
-  const hard = source.hard && typeof source.hard === "object" ? source.hard : FALLBACK_RULES.hard;
+  const source = value && typeof value === "object" ? value as Partial<RuleSettings> & Record<string, unknown> : {};
+  const hard = source.hard && typeof source.hard === "object" ? source.hard as Record<string, unknown> : FALLBACK_RULES.hard;
   const lowFollower = source.lowFollowerNewAccount && typeof source.lowFollowerNewAccount === "object"
     ? source.lowFollowerNewAccount
     : FALLBACK_RULES.lowFollowerNewAccount;
   const categories = Array.isArray(source.positiveCategories) ? source.positiveCategories : [];
+  const isBilibili = source.platform === "bilibili";
   return {
     ...source,
     version: Number(source.version || FALLBACK_RULES.version),
     includeLive: false,
+    includeDigital: source.includeDigital === true,
     hard: {
       minVideoDurationSeconds: Number(hard.minVideoDurationSeconds ?? FALLBACK_RULES.hard.minVideoDurationSeconds),
       minVideoLikes: Number(hard.minVideoLikes ?? FALLBACK_RULES.hard.minVideoLikes),
       preferredVideoLikes: Number(hard.preferredVideoLikes ?? FALLBACK_RULES.hard.preferredVideoLikes),
-      minFollowers: Number(hard.minFollowers ?? FALLBACK_RULES.hard.minFollowers),
-      maxFollowers: Number(hard.maxFollowers ?? FALLBACK_RULES.hard.maxFollowers)
+      minFollowers: hard.minFollowers == null ? "" : Number(hard.minFollowers ?? FALLBACK_RULES.hard.minFollowers),
+      maxFollowers: hard.maxFollowers == null ? "" : Number(hard.maxFollowers ?? FALLBACK_RULES.hard.maxFollowers),
+      ...(isBilibili ? {
+        minPlays: Number(hard.minPlays ?? 100000),
+        rejectPlaysBelow: Number(hard.rejectPlaysBelow ?? 10000),
+        earlyPlayWindowDays: Number(hard.earlyPlayWindowDays ?? 3)
+      } : {})
     },
     lowFollowerNewAccount: {
-      enabled: lowFollower.enabled !== false,
+      enabled: isBilibili ? lowFollower.enabled === true : lowFollower.enabled !== false,
       maxVideos: Number(lowFollower.maxVideos ?? FALLBACK_RULES.lowFollowerNewAccount.maxVideos),
       minAverageLikes: Number(lowFollower.minAverageLikes ?? FALLBACK_RULES.lowFollowerNewAccount.minAverageLikes),
-      requireCompleteWorksList: lowFollower.requireCompleteWorksList !== false
+      requireCompleteWorksList: isBilibili ? lowFollower.requireCompleteWorksList === true : lowFollower.requireCompleteWorksList !== false
     },
-    positiveCategories: categories.map((category, index) => ({
-      id: String(category?.id || `category-${index + 1}`),
-      name: String(category?.name || "未命名类目"),
-      score: Number(category?.score || 0),
-      audience: String(category?.audience || "未知"),
-      keywords: Array.isArray(category?.keywords) ? category.keywords.map(String).filter(Boolean) : [],
-      enabled: category?.enabled !== false
-    })),
-    gameBlacklist: Array.isArray(source.gameBlacklist) ? source.gameBlacklist.map(String).filter(Boolean) : [],
+    positiveCategories: categories.length ? categories.map((category) => ({
+      id: String(category.id || ""),
+      name: String(category.name || ""),
+      score: Number(category.score || 0),
+      audience: String(category.audience || ""),
+      keywords: Array.isArray(category.keywords) ? category.keywords.map(String) : [],
+      enabled: category.enabled !== false
+    })) : FALLBACK_RULES.positiveCategories,
+    gameBlacklist: Array.isArray(source.gameBlacklist) ? source.gameBlacklist.map(String) : [],
+    contentBlacklist: Array.isArray(source.contentBlacklist) ? source.contentBlacklist.map(String) : [],
+    excludeTnames: Array.isArray(source.excludeTnames) ? source.excludeTnames.map(String) : [],
     feiguaKeywords: Array.isArray(source.feiguaKeywords) ? source.feiguaKeywords.map(String).filter(Boolean) : [...FEIGUA_KEYWORDS],
-    riskGroups: []
+    riskGroups: Array.isArray(source.riskGroups) ? source.riskGroups : []
   };
 }

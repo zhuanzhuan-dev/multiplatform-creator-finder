@@ -48,3 +48,18 @@ test('Kuaishou recommendation is runnable; profiles and discovery stay read-only
   assert.equal(resolveRoute('https://www.kuaishou.com/profile/abc')?.runnable,false);
   assert.equal(resolveRoute('https://www.kuaishou.com/')?.runnable,false);
 });
+
+test('Bilibili homepage recommend is runnable via web feed API path', () => {
+  assert.equal(launchUrl('bilibili', 'recommend'), 'https://www.bilibili.com/');
+  assert.equal(resolveRoute('https://www.bilibili.com/')?.runnable, true);
+  assert.equal(resolveRoute('https://www.bilibili.com/?spm_id_from=333.1007')?.surface, 'recommend');
+  assert.equal(resolveRoute('https://www.bilibili.com/video/BV1xx411c7mD')?.runnable, false);
+  assert.equal(resolveRoute('https://www.bilibili.com/anime/')?.runnable, false);
+});
+
+test('Bilibili popular ranking is a separate runnable surface', () => {
+  assert.equal(launchUrl('bilibili', 'popular'), 'https://www.bilibili.com/v/popular/all');
+  assert.equal(resolveRoute('https://www.bilibili.com/v/popular/all')?.surface, 'popular');
+  assert.equal(resolveRoute('https://www.bilibili.com/v/popular/all')?.runnable, true);
+  assert.equal(resolveRoute('https://www.bilibili.com/v/popular/history')?.runnable, false);
+});

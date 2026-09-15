@@ -54,7 +54,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
   const siteKey = launcherSiteKey(location.hostname);
   let preferences = launcherPreferences(), preferencesReady = false, visitHidden = visitHiddenInitially;
   let currentInfo = { visible: true, status: 'idle' };
-  let taskStates = {douyin:{},kuaishou:{},feigua:{}};
+  let taskStates = {douyin:{},kuaishou:{},bilibili:{},feigua:{}};
   const size = () => preferences.compact ? 28 : 36;
   function visibility() {
     host.dataset.visitHidden = String(visitHidden);
@@ -168,10 +168,11 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
     if(changes.draState) taskStates.douyin=changes.draState.newValue || {};
     if(changes.draFeiguaState) taskStates.feigua=changes.draFeiguaState.newValue || {};
     if(changes.draKuaishou) taskStates.kuaishou=changes.draKuaishou.newValue?.state || {};
-    if(changes.draState || changes.draFeiguaState || changes.draKuaishou) render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([platform,task])=>({...task,route:{platform}})))));
+    if(changes.draBilibili) taskStates.bilibili=changes.draBilibili.newValue?.state || {};
+    if(changes.draState || changes.draFeiguaState || changes.draKuaishou || changes.draBilibili) render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([platform,task])=>({...task,route:{platform}})))));
     if(changes.draLauncherPosition && !drag){savedPosition=normalizeLauncherPosition(changes.draLauncherPosition.newValue);position();}
   });
-  chrome.storage.local.get(['draState','draFeiguaState','draKuaishou','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey]).then(saved=>{taskStates={douyin:{...saved.draState,route:{platform:"douyin"}},kuaishou:{...saved.draKuaishou?.state,route:{platform:"kuaishou"}},feigua:{...saved.draFeiguaState,route:{platform:"feigua"}}};render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([platform,task])=>({...task,route:{platform}})))));preferences=launcherPreferences(saved,location.hostname);preferencesReady=true;visibility();theme=saved.draTheme||'system';savedPosition=normalizeLauncherPosition(saved.draLauncherPosition);appearance();position();}).catch(()=>host.remove());
+  chrome.storage.local.get(['draState','draFeiguaState','draKuaishou','draBilibili','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey]).then(saved=>{taskStates={douyin:{...saved.draState,route:{platform:"douyin"}},kuaishou:{...saved.draKuaishou?.state,route:{platform:"kuaishou"}},bilibili:{...saved.draBilibili?.state,route:{platform:"bilibili"}},feigua:{...saved.draFeiguaState,route:{platform:"feigua"}}};render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([platform,task])=>({...task,route:{platform}})))));preferences=launcherPreferences(saved,location.hostname);preferencesReady=true;visibility();theme=saved.draTheme||'system';savedPosition=normalizeLauncherPosition(saved.draLauncherPosition);appearance();position();}).catch(()=>host.remove());
   system.addEventListener('change',appearance);addEventListener('resize',position);
   void refresh();
 })();

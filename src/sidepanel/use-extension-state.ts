@@ -98,6 +98,10 @@ export function useExtensionState() {
         typicalSeconds: draft.dwellTypicalSeconds,
         maxSeconds: draft.dwellMaxSeconds
       },
+      bilibiliBatchDelay: {
+        minSeconds: draft.bilibiliBatchMinSeconds,
+        maxSeconds: draft.bilibiliBatchMaxSeconds
+      },
       target: {
         mode: draft.targetMode,
         durationMinutes: draft.targetDurationMinutes,
@@ -162,19 +166,21 @@ export function useExtensionState() {
     setBusyAction(action);
     show("");
     try {
+      const concrete = ["douyin", "kuaishou", "bilibili", "bilibili-popular", "feigua"].includes(selectedPlatform);
+      const platform = concrete ? selectedPlatform : (snapshot?.state?.route?.platform || "auto");
       if (action === "start") {
         show("正在连接研究台并绑定当前标签页…");
-        if (snapshot?.state?.route?.platform !== "feigua" && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
+        if (platform !== "feigua" && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
         const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_START", tabId: tab.id, platform: snapshot?.state?.route?.platform });
+        await sendRuntime({ type: "DRA_START", tabId: tab.id, platform });
       } else if (action === "resume") {
         show("正在恢复本轮，保留已有计数与记录…");
         const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform: snapshot?.state?.route?.platform, runId: snapshot?.state?.runId });
+        await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform, runId: snapshot?.state?.runId });
       } else if (action === "pause") {
-        await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId, platform: snapshot?.state?.route?.platform, runId: snapshot?.state?.runId });
+        await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId, platform, runId: snapshot?.state?.runId });
       } else {
-        await sendRuntime({ type: "DRA_STOP", tabId: snapshot?.state?.feedTabId, platform: snapshot?.state?.route?.platform, runId: snapshot?.state?.runId });
+        await sendRuntime({ type: "DRA_STOP", tabId: snapshot?.state?.feedTabId, platform, runId: snapshot?.state?.runId });
       }
       await refresh();
       show("");

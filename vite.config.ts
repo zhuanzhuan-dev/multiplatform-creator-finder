@@ -18,6 +18,12 @@ function extensionRuntime(): Plugin {
     "content/kuaishou-content.js",
     "lib/kuaishou-page.js",
     "lib/kuaishou-task.js",
+    "content/bilibili-content.js",
+    "lib/bilibili-api.js",
+    "lib/bilibili-rules.js",
+    "lib/bilibili-task.js",
+    "lib/bilibili-wbi.js",
+    "lib/bilibili-md5.js",
     "content/floating-launcher.js",
     "lib/launcher-position.js",
     "content/feigua-page.js",
@@ -37,6 +43,7 @@ function extensionRuntime(): Plugin {
     async closeBundle() {
       await Promise.all([
         esbuild({entryPoints:[resolve(root,"content/kuaishou-content.js")],outfile:resolve(outputDirectory,"content/kuaishou-content.js"),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"}),
+        esbuild({entryPoints:[resolve(root,"content/bilibili-content.js")],outfile:resolve(outputDirectory,"content/bilibili-content.js"),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"}),
         esbuild({
           entryPoints: [resolve(root, "content/floating-launcher.js")],
           outfile: resolve(outputDirectory, "content/floating-launcher.js"),

@@ -87,6 +87,15 @@
     },
     {
       "matches": [
+        "https://www.bilibili.com/*"
+      ],
+      "js": [
+        "content/bilibili-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "http://*/*",
         "https://*/*"
       ],

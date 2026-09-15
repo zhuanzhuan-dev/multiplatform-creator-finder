@@ -2,8 +2,8 @@ import { DOUYIN_RECOMMEND_URL } from "../../lib/platform-routes.js";
 
 export { DOUYIN_RECOMMEND_URL };
 
-export type PlatformId = "douyin" | "kuaishou" | "feigua";
-export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "library" | "unknown";
+export type PlatformId = "douyin" | "kuaishou" | "feigua" | "bilibili";
+export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "library" | "popular" | "unknown";
 
 export interface RouteContext {
   platform: PlatformId;
@@ -54,6 +54,20 @@ const PLATFORM_ROUTES: readonly PlatformRoute[] = [
       : /^#\/video-detail\/index(?:[?]|$)/.test(url.hash) ? {surface:'video',label:'飞瓜视频详情',runnable:false}
       : /^#\/blogger-detail\/index(?:[?]|$)/.test(url.hash) ? {surface:'creator',label:'飞瓜达人详情',runnable:false}
       : { surface: "unknown", label: "飞瓜：请打开视频库", runnable: false }
+  },
+  {
+    platform: "bilibili",
+    hostnames: ["www.bilibili.com"],
+    classify(url) {
+      if (url.pathname.startsWith("/video/")) return { surface: "video", label: "B站视频详情", runnable: false };
+      if (url.pathname === "/v/popular/all" || url.pathname.startsWith("/v/popular/all")) {
+        return { surface: "popular", label: "B站综合热门", runnable: true };
+      }
+      if (url.pathname === "/" || url.pathname === "") {
+        return { surface: "recommend", label: "B站首页推荐", runnable: true };
+      }
+      return { surface: "unknown", label: "B站：请打开首页或综合热门", runnable: false };
+    }
   }
 ];
 
@@ -80,6 +94,8 @@ export function firstRunnableTabInWindow<T extends TabRouteCandidate>(tabs: read
 export function launchUrl(platform: PlatformId, surface: SurfaceId): string {
   if (platform === "kuaishou" && surface === "recommend") return "https://www.kuaishou.com/new-reco";
   if (platform === "feigua" && surface === "library") return "https://dy.feigua.cn/app/#/video/library/all";
+  if (platform === "bilibili" && surface === "recommend") return "https://www.bilibili.com/";
+  if (platform === "bilibili" && surface === "popular") return "https://www.bilibili.com/v/popular/all";
   if (platform === "douyin" && surface === "recommend") {
     return DOUYIN_RECOMMEND_URL;
   }
