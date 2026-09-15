@@ -7,10 +7,11 @@ const platforms = [
   {id:'kuaishou',label:'快手推荐',unit:'条',brand:'kuaishou'},
   {id:'bilibili',label:'B站首页推荐',unit:'条',brand:'bilibili'},
   {id:'bilibili-popular',label:'B站综合热门',unit:'条',brand:'bilibili'},
-  {id:'feigua',label:'飞瓜视频库',unit:'页',brand:'feigua'}
+  {id:'feigua',label:'飞瓜视频库',unit:'页',brand:'feigua'},
+  {id:'xingtu',label:'星图达人广场',unit:'页',brand:'xingtu'}
 ];
 const statuses: Record<string,string> = {running:'运行中',starting:'启动中',paused:'已暂停',stopped:'已结束'};
-const platformShort: Record<string,string> = {douyin:'抖音',kuaishou:'快手',bilibili:'B站', 'bilibili-popular':'热门', feigua:'飞瓜'};
+const platformShort: Record<string,string> = {douyin:'抖音',kuaishou:'快手',bilibili:'B站', 'bilibili-popular':'热门', feigua:'飞瓜', xingtu:'星图'};
 
 function taskFor(tasks: RunState[], platformId: string) {
   if (platformId === 'bilibili') return tasks.find(item => item.route?.platform === 'bilibili' && item.route?.surface !== 'popular');
@@ -49,8 +50,8 @@ export function PlatformTasks({tasks,selected,resolved,busy,onSelect}: Props) {
     </div>
     <div className="platform-list" role="group" aria-label="选择要控制的平台">
       {platforms.map(platform=>{
-        const task=taskFor(tasks, platform.id) || (platform.id.startsWith('bilibili') ? tasks.find(item=>item.route?.platform==='bilibili') : undefined);
-        const count=platform.id==='feigua'?task?.stats?.pagesCollected:task?.stats?.scanned;
+        const task=taskFor(tasks, platform.id);
+        const count=['feigua','xingtu'].includes(platform.id)?task?.stats?.pagesCollected:task?.stats?.scanned;
         const chosen=current===platform.id;
         return <button key={platform.id} className="platform-row" aria-pressed={chosen} disabled={busy} onClick={()=>{onSelect(platform.id);close();}}>
           <span className={`platform-logo ${platform.brand}`}><img src={`../brands/${platform.brand}.${platform.brand==='feigua'?'png':'ico'}`} alt="" /></span>
@@ -59,6 +60,6 @@ export function PlatformTasks({tasks,selected,resolved,busy,onSelect}: Props) {
         </button>;
       })}
     </div>
-    <details className="platform-help"><summary>{currentMeta?`当前操作仅作用于${currentMeta.label}`:'切换到抖音、快手、B站或飞瓜网页以跟随任务'}</summary><p>B 站含首页推荐与综合热门两条源，均按登录账号接口采集；规则与抖音/快手独立。各平台可切换控制，上传共用队列。</p></details>
+    <details className="platform-help"><summary>{currentMeta?`当前操作仅作用于${currentMeta.label}`:'切换到抖音、快手、B站、飞瓜或星图网页以跟随任务'}</summary><p>B 站首页推荐与综合热门各自独立运行、目标和规则分开保存，可并行采集；飞瓜和星图按已登录网页翻页采集。各平台可切换控制，上传共用队列。</p></details>
   </section></div>;
 }

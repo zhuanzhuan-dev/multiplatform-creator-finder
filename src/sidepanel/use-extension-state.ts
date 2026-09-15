@@ -166,11 +166,13 @@ export function useExtensionState() {
     setBusyAction(action);
     show("");
     try {
-      const concrete = ["douyin", "kuaishou", "bilibili", "bilibili-popular", "feigua"].includes(selectedPlatform);
-      const platform = concrete ? selectedPlatform : (snapshot?.state?.route?.platform || "auto");
+      const concrete = ["douyin", "kuaishou", "bilibili", "bilibili-popular", "feigua", "xingtu"].includes(selectedPlatform);
+      const route = snapshot?.state?.route;
+      const inferred = route?.platform === "bilibili" && route?.surface === "popular" ? "bilibili-popular" : route?.platform;
+      const platform = concrete ? selectedPlatform : (inferred || "auto");
       if (action === "start") {
         show("正在连接研究台并绑定当前标签页…");
-        if (platform !== "feigua" && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
+        if (!["feigua", "xingtu"].includes(platform) && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_START", tabId: tab.id, platform });
       } else if (action === "resume") {
@@ -274,6 +276,12 @@ export function useExtensionState() {
     catch(error){show(error instanceof Error?error.message:String(error),true);}
     finally {setBusyAction('');}
   };
+  const openXingtu = async () => {
+    setBusyAction('open');
+    try { const tab=await getPanelTab(); await sendRuntime({type:'DRA_OPEN_XINGTU',windowId:tab.windowId}); await refresh(); }
+    catch(error){show(error instanceof Error?error.message:String(error),true);}
+    finally {setBusyAction('');}
+  };
   const openWorkbench = async () => {
     try { await sendRuntime({ type: "DRA_OPEN_WORKBENCH" }); }
     catch (error) { show(error instanceof Error ? error.message : String(error), true); }
@@ -285,6 +293,7 @@ export function useExtensionState() {
     settingsNotice,
     openWorkbench,
     openFeigua,
+    openXingtu,
     notice,
     busyAction,
     bridgeChecking,

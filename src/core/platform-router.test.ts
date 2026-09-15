@@ -57,6 +57,18 @@ test('Bilibili homepage recommend is runnable via web feed API path', () => {
   assert.equal(resolveRoute('https://www.bilibili.com/anime/')?.runnable, false);
 });
 
+test('Xingtu creator market is runnable; author homepage stays read-only', () => {
+  assert.equal(launchUrl('xingtu', 'market'), 'https://www.xingtu.cn/ad/creator/market');
+  assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/market')?.runnable, true);
+  assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/market?tab=1')?.surface, 'market');
+  assert.equal(resolveRoute('https://www.xingtu.cn/#/ad/creator/market')?.surface, 'market');
+  assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author/12345')?.surface, 'creator');
+  assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author/douyin/987654')?.surface, 'creator');
+  assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author/douyin/987654')?.runnable, false);
+  assert.equal(resolveRoute('https://www.xingtu.cn/')?.runnable, false);
+  assert.equal(isRunnableRoute('http://www.xingtu.cn/ad/creator/market'), false);
+});
+
 test('Bilibili popular ranking is a separate runnable surface', () => {
   assert.equal(launchUrl('bilibili', 'popular'), 'https://www.bilibili.com/v/popular/all');
   assert.equal(resolveRoute('https://www.bilibili.com/v/popular/all')?.surface, 'popular');

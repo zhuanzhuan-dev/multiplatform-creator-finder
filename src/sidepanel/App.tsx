@@ -3,6 +3,7 @@ import { PlatformTasks } from "./PlatformTasks";
 import { sendRuntime } from '../shared/chrome-runtime';
 import { DouyinTaskPage } from "./DouyinTaskPage";
 import { FeiguaTaskPage } from "./FeiguaTaskPage";
+import { XingtuTaskPage } from "./XingtuTaskPage";
 import { LauncherSettings } from "./LauncherSettings";
 import { RawCaptureSettings } from "./RawCaptureSettings";
 import { usePanelPresence } from "./use-panel-presence";
@@ -73,9 +74,10 @@ export default function App() {
       </header>
       {!connected ? cloudPanel : <div className="connection-summary">研究台已连接 · 结果自动同步</div>}
       {draft.dryRun ? <p className="test-mode-note">新任务使用本地测试模式 · 新采集结果只存本机，已有正式上传队列继续同步</p> : null}
-      {extension.selectedPlatform!=='auto' ? <p className="field-note">正在手动查看{({feigua:'飞瓜',kuaishou:'快手',bilibili:'B站首页','bilibili-popular':'B站热门',douyin:'抖音'} as Record<string,string>)[extension.selectedPlatform] || '所选'}任务，当前网页不会改变。</p> : null}
+      {extension.selectedPlatform!=='auto' ? <p className="field-note">正在手动查看{({feigua:'飞瓜',xingtu:'星图',kuaishou:'快手',bilibili:'B站首页','bilibili-popular':'B站热门',douyin:'抖音'} as Record<string,string>)[extension.selectedPlatform] || '所选'}任务，当前网页不会改变。</p> : null}
       {state.route?.platform === 'feigua' ? <FeiguaTaskPage extension={extension} draft={draft} now={now} />
-        : ['douyin','kuaishou','bilibili'].includes(state.route?.platform || '') || ['bilibili','bilibili-popular'].includes(extension.selectedPlatform) ? <DouyinTaskPage extension={extension} now={now} draft={draft} setDraft={setDraft} ruleDraft={ruleDraft} setRuleDraft={setRuleDraft} configurationLocked={configurationLocked} connected={connected} /> : <section className="feigua-task-card"><h2>选择采集平台</h2><p>当前页面尚未适配。通过上方任务选择查看抖音、快手、B站或飞瓜，再打开对应采集页。</p></section>}
+        : state.route?.platform === 'xingtu' ? <XingtuTaskPage extension={extension} draft={draft} now={now} />
+        : ['douyin','kuaishou','bilibili'].includes(state.route?.platform || '') || ['bilibili','bilibili-popular'].includes(extension.selectedPlatform) ? <DouyinTaskPage extension={extension} now={now} draft={draft} setDraft={setDraft} ruleDraft={ruleDraft} setRuleDraft={setRuleDraft} configurationLocked={configurationLocked} connected={connected} /> : <section className="feigua-task-card"><h2>选择采集平台</h2><p>当前页面尚未适配。通过上方任务选择查看抖音、快手、B站、飞瓜或星图，再打开对应采集页。</p></section>}
       {!['douyin','kuaishou','bilibili'].includes(state.route?.platform || '') && !['bilibili','bilibili-popular'].includes(extension.selectedPlatform) ? <section className="feigua-task-card"><RecentDecisions now={now} history={snapshot.decisionHistory} total={snapshot.decisionHistoryTotal} />
         <button onClick={()=>{void sendRuntime<{ok:boolean;records:unknown[]}>({type:'DRA_EXPORT_OBSERVATIONS'}).then(result=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.records,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`采集观察-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(error=>window.alert(errorMessage(error)));}}>导出本地完整观察</button>
       </section> : null}

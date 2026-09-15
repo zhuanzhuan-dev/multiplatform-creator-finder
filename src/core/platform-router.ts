@@ -2,8 +2,8 @@ import { DOUYIN_RECOMMEND_URL } from "../../lib/platform-routes.js";
 
 export { DOUYIN_RECOMMEND_URL };
 
-export type PlatformId = "douyin" | "kuaishou" | "feigua" | "bilibili";
-export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "library" | "popular" | "unknown";
+export type PlatformId = "douyin" | "kuaishou" | "feigua" | "bilibili" | "xingtu";
+export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "library" | "popular" | "market" | "unknown";
 
 export interface RouteContext {
   platform: PlatformId;
@@ -68,6 +68,21 @@ const PLATFORM_ROUTES: readonly PlatformRoute[] = [
       }
       return { surface: "unknown", label: "B站：请打开首页或综合热门", runnable: false };
     }
+  },
+  {
+    platform: "xingtu",
+    hostnames: ["www.xingtu.cn", "xingtu.cn"],
+    classify(url) {
+      const path = url.pathname.replace(/\/+$/, "") || "/";
+      const hash = (url.hash.split("?")[0] || "").replace(/^#/, "");
+      if (path === "/ad/creator/market" || path.startsWith("/ad/creator/market/") || hash === "/ad/creator/market" || hash.startsWith("/ad/creator/market")) {
+        return { surface: "market", label: "星图达人广场", runnable: true };
+      }
+      if (/^\/ad\/creator\/author\/(?:douyin\/)?[^/]+$/.test(path) || /^\/ad\/creator\/author\/(?:douyin\/)?[^/]+$/.test(hash)) {
+        return { surface: "creator", label: "星图达人主页", runnable: false };
+      }
+      return { surface: "unknown", label: "星图：请打开达人广场", runnable: false };
+    }
   }
 ];
 
@@ -96,6 +111,7 @@ export function launchUrl(platform: PlatformId, surface: SurfaceId): string {
   if (platform === "feigua" && surface === "library") return "https://dy.feigua.cn/app/#/video/library/all";
   if (platform === "bilibili" && surface === "recommend") return "https://www.bilibili.com/";
   if (platform === "bilibili" && surface === "popular") return "https://www.bilibili.com/v/popular/all";
+  if (platform === "xingtu" && surface === "market") return "https://www.xingtu.cn/ad/creator/market";
   if (platform === "douyin" && surface === "recommend") {
     return DOUYIN_RECOMMEND_URL;
   }

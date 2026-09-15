@@ -1,4 +1,5 @@
 import { DEFAULT_KEYWORDS as FEIGUA_KEYWORDS } from "../../lib/feigua-parser.js";
+import { DEFAULT_KEYWORDS as XINGTU_KEYWORDS } from "../../lib/xingtu-parser.js";
 export interface Stats {
   pagesCollected?: number;
   rejectedProfiles?: number;
@@ -105,8 +106,11 @@ export interface ScheduleSettings {
 export interface Settings {
   feiguaTarget?: { maxPages?: number };
   feiguaDelay?: { minSeconds: number; maxSeconds: number };
+  xingtuTarget?: { maxPages?: number };
+  xingtuDelay?: { minSeconds: number; maxSeconds: number };
   bilibiliBatchDelay?: { minSeconds: number; maxSeconds: number };
   feiguaUploadEnabled?: boolean;
+  xingtuUploadEnabled?: boolean;
   engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
   dwell?: DwellPolicy;
   target?: RunTarget;
@@ -136,6 +140,7 @@ export interface Snapshot {
   pageRoute?: {platform:string;surface:string;label:string}|null;
   browsing?: {enabled:boolean;count:number;lastCapturedAt?:string;lastPageUrl?:string;lastError?:string};
   feigua?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;videos?:{videoId?:string;title?:string;coverUrl?:string;videoUrl?:string;durationSeconds?:number|null;metrics?:Record<string,string>;hotWords?:string[];observedAt?:string}[]}[]};
+  xingtu?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;xingtuId?:string;xingtuIndex?:string;tags?:string[];prices?:Record<string,string>;metrics?:Record<string,string>;city?:string;gender?:string}[]};
   tasks?: RunState[];
   decisionHistory?: Decision[];
   decisionHistoryTotal?: number;
@@ -246,6 +251,7 @@ export interface RuleSettings {
   contentBlacklist?: string[];
   excludeTnames?: string[];
   feiguaKeywords: string[];
+  xingtuKeywords: string[];
   riskGroups?: unknown[];
   [key: string]: unknown;
 }
@@ -269,6 +275,7 @@ const FALLBACK_RULES: RuleSettings = {
   positiveCategories: [],
   gameBlacklist: [],
   feiguaKeywords: [...FEIGUA_KEYWORDS],
+  xingtuKeywords: [...XINGTU_KEYWORDS],
   riskGroups: []
 };
 
@@ -315,6 +322,7 @@ export function rulesDraft(value: unknown): RuleSettings {
     contentBlacklist: Array.isArray(source.contentBlacklist) ? source.contentBlacklist.map(String) : [],
     excludeTnames: Array.isArray(source.excludeTnames) ? source.excludeTnames.map(String) : [],
     feiguaKeywords: Array.isArray(source.feiguaKeywords) ? source.feiguaKeywords.map(String).filter(Boolean) : [...FEIGUA_KEYWORDS],
+    xingtuKeywords: Array.isArray(source.xingtuKeywords) ? source.xingtuKeywords.map(String).filter(Boolean) : [...XINGTU_KEYWORDS],
     riskGroups: Array.isArray(source.riskGroups) ? source.riskGroups : []
   };
 }

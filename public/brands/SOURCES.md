@@ -10,3 +10,4 @@
 
 - 快手：推荐页声明的官方 favicon https://p66-plat.wskwai.com/udata/pkg/WEB-LIVE/kwai_icon.8f6787d8.ico ，保存为 `kuaishou.ico`，32×32。
 - bilibili.ico： https://i0.hdslb.com/bfs/static/jinkela/long/images/favicon.ico ，官网静态资源 32×32 图标。
+- xingtu.ico： https://www.xingtu.cn/favicon.ico ，官网 32×32 图标。

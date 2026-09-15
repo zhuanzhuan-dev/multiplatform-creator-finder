@@ -67,7 +67,7 @@ export function decisionMetricLine(decision: {
 
 export function decisionMeta(code = ""): { label: string; tone: string } {
   const value = code.toUpperCase();
-  if (value === "FEIGUA_OBSERVED") return {label:"浏览已采集",tone:"review"};
+  if (value === "FEIGUA_OBSERVED" || value === "XINGTU_OBSERVED") return {label:"浏览已采集",tone:"review"};
   if (value === "ACCEPTED") return { label: "符合条件", tone: "good" };
   if (value.includes("REVIEW")) return { label: "需人工确认", tone: "review" };
   if (value === "AD_SKIPPED") return { label: "跳过广告", tone: "reject" };
