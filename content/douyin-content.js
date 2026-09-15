@@ -9,6 +9,41 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
   const parser = globalThis.DouyinAutoFinderParser;
   if (!parser) return;
 
+  function requestPageIdentity(command, payload, timeoutMs) {
+    return new Promise(resolve => {
+      const id = crypto.randomUUID();
+      const channel = "DOUYIN_AUTO_FINDER_PAGE";
+      const finish = value => { clearTimeout(timer); window.removeEventListener("message", receive); resolve(value); };
+      const receive = event => {
+        if (event.source === window && event.data?.channel === channel && event.data?.direction === "response" && event.data?.id === id) finish(event.data.result);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      window.addEventListener("message", receive);
+      window.postMessage({ channel, direction: "request", id, command, payload }, "*");
+    });
+  }
+
+  function observationFingerprint(observation) {
+    if (!observation) return "";
+    return observation.videoId || [observation.secUid, observation.caption, observation.subtype].filter(Boolean).join("|");
+  }
+
+  async function readCurrentObservation(request = requestPageIdentity) {
+    const card = parser.visibleFeedItem(document);
+    const observation = parser.parseCurrentFeed(document);
+    if (!observation || observation.blockedReason) return observation;
+    let identity;
+    try { identity = await request("GET_FEED_IDENTITY", {}, 3_000); } catch { identity = null; }
+    const after = parser.parseCurrentFeed(document);
+    const sameCard = card === parser.visibleFeedItem(document) && observationFingerprint(after) === observationFingerprint(observation);
+    if (!sameCard || !identity?.contentType || (observation.videoId && identity.contentId && observation.videoId !== identity.contentId)) {
+      return { ...after, contentType: "unknown", subtype: "unknown", isLive: false, typeEvidence: ["当前卡片数据未确认，等待重新读取"] };
+    }
+    // Dedicated gallery DOM remains useful; unverified live signals never cause a live skip.
+    if (identity.contentType === "unknown" && !identity.contentId && observation.contentType === "photo") return observation;
+    return { ...observation, ...identity };
+  }
+
   function createLoop(settings, rules, runId, loopId, resume = null) {
     const abort = new AbortController();
     const PAGE_CHANNEL = "DOUYIN_AUTO_FINDER_PAGE";
@@ -79,10 +114,6 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       });
     }
 
-    function observationFingerprint(observation) {
-      if (!observation) return "";
-      return observation.videoId || [observation.secUid, observation.caption, observation.subtype].filter(Boolean).join("|");
-    }
 
     function hasPositiveNumber(value) {
       if (value == null || value === "") return false;
@@ -95,9 +126,9 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       return Number.isFinite(Number(value));
     }
 
-    async function waitForObservationHydration(initialObservation, timeoutMs = 6_000) {
+    async function waitForObservationHydration(timeoutMs = 6_000) {
       const deadline = Date.now() + timeoutMs;
-      let observation = initialObservation;
+      let observation = await readCurrentObservation(pageCommand);
       while (Date.now() < deadline && running) {
         const skip = observation && contentSkipDecision(observation);
         if (observation?.blockedReason || skip && skip.code !== "UNKNOWN_TYPE_SKIPPED") return observation;
@@ -109,7 +140,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           return observation;
         }
         await sleep(300);
-        observation = parser.parseCurrentFeed(document);
+        observation = await readCurrentObservation(pageCommand);
       }
       return observation;
     }
@@ -384,7 +415,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
           return;
         }
 
-        let observation = await waitForObservationHydration(parser.parseCurrentFeed(document));
+        let observation = await waitForObservationHydration();
         if (observation?.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: observation.blockedReason });
           running = false;
@@ -430,7 +461,7 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
         if (!running) return;
 
         await progress("submit");
-        const refreshed = shouldDwell ? await waitForObservationHydration(parser.parseCurrentFeed(document), 2_000) : null;
+        const refreshed = shouldDwell ? await waitForObservationHydration(2_000) : null;
         if (refreshed?.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: refreshed.blockedReason });
           running = false;
@@ -541,13 +572,10 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
       return false;
     }
     if (message?.type === "DRA_PARSE_FEED") {
-      try {
-        const observation = parser.parseCurrentFeed(document);
+      readCurrentObservation().then(observation => {
         sendResponse({ ok: true, observation, profile: observation && contentSkipDecision(observation) ? null : parser.parseCreatorPanel(document, observation) });
-      } catch (error) {
-        sendResponse({ ok: false, error: error?.message || String(error) });
-      }
-      return false;
+      }).catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
+      return true;
     }
     return false;
   });

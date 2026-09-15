@@ -1,3 +1,4 @@
+import { structuredFeedIdentity } from "../lib/structured-feed-identity.js";
 import { pageCardData } from "../lib/raw-sample.js";
 (function installDouyinPageBridge() {
   "use strict";
@@ -147,6 +148,7 @@ import { pageCardData } from "../lib/raw-sample.js";
     if (event.source !== window || event.data?.channel !== CHANNEL || event.data?.direction !== "request") return;
     const { id, command, payload = {} } = event.data;
     Promise.resolve().then(async () => {
+      if (command === "GET_FEED_IDENTITY") return structuredFeedIdentity(activeItem()?.element);
       if (command === "GET_FEED_RAW") return pageCardData(activeItem()?.element, String(payload.videoId || ""));
       if (command === "GET_CREATOR_PANEL_STATE") return creatorPanelUiState();
       if (command === "GET_FEED_TARGET") return feedTarget();

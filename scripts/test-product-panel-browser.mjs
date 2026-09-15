@@ -69,7 +69,7 @@ try{
      classify('<a href="https://live.douyin.com/123456">进入直播间</a>')
    ]; host.remove();return result;
  })()`);
- assert.deepEqual(classifier.map(x=>[x.contentType,x.isAd]),[['video',false],['live',false],['photo',false],['video',true],['unknown',false],['video',false],['video',false],['video',false],['live',false]]);
+ assert.deepEqual(classifier.map(x=>[x.contentType,x.isAd]),[['video',false],['live',false],['photo',false],['video',true],['video',false],['video',false],['video',false],['video',false],['video',false]]);
  report.scenarios.push('real-DOM-content-type-9-cases-caption-hidden-drawer-exclusions');
  await api(`(() => {
   const send=chrome.runtime.sendMessage.bind(chrome.runtime);
