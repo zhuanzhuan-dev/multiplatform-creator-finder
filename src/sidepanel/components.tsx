@@ -1,5 +1,6 @@
 import { errorMessage } from '../shared/error-message';
 import { sourcePlatformLabel } from "../../lib/source-platform.js";
+import { recentHistoryUrl } from "../../lib/cloud.js";
 import { canResumeRun, elapsedRunMs } from "../../lib/run-limits.js";
 import { useState } from "react";
 import { NumberInput, inputNumber } from "../shared/NumberInput";
@@ -106,7 +107,7 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
 export function RecentDecisions({ now, history = [], total = 0 }: { now: number; history?: Decision[]; total?: number }) {
   const decisions = history;
   const visibleDecisions = decisions.slice(0, COLLAPSED_DECISION_COUNT);
-  const openDecisionHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
+  const openDecisionHistory = () => chrome.tabs.create({ url: recentHistoryUrl() });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
       <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">近 24 小时 · 最近 {visibleDecisions.length} 条</span></div>
@@ -131,15 +132,13 @@ export function RecentDecisions({ now, history = [], total = 0 }: { now: number;
           );
         })}
       </div>
-      {decisions.length > 0 ? (
-        <button
-          className="decision-toggle"
-          type="button"
-          onClick={() => void openDecisionHistory()}
-        >
-          查看近 24 小时记录（{total}）
-        </button>
-      ) : null}
+      <button
+        className="decision-toggle"
+        type="button"
+        onClick={() => void openDecisionHistory()}
+      >
+        查看近 24 小时记录{total ? `（${total}）` : ""}
+      </button>
     </section>
   );
 }
