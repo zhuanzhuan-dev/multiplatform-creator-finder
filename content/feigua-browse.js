@@ -1,7 +1,8 @@
-import { collectCurrentPage, collectDetailPage, browsingSurface, pageAccessProblem } from './feigua-page.js';
+import { collectCurrentPage, collectDetailPage, browsingSurface, pageAccessProblem, revealList } from './feigua-page.js';
+import { FEIGUA_IMAGE_GRACE_MS } from '../lib/feigua-policy.js';
 // Passive collection never clicks or changes the page. Mutation bursts settle twice.
 export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
-  let timer=null, stopped=false, last='', stable='', sending=false, waitingSince=null;
+  let timer=null, stopped=false, last='', stable='', sending=false, waitingSince=null, imageWaitStarted=null;
   const status=value=>{if(document.documentElement)document.documentElement.dataset.draFeiguaBrowse=value;};
   status('ready');
   const send=message=>chrome.runtime.sendMessage(message);
@@ -24,8 +25,12 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
       if(!surface || document.visibilityState!=='visible' || problem){stable='';if(problem==='loading')waitForData('loading');return;}
       const config=await send({type:'DRA_FEIGUA_BROWSE_STATUS',surface});
       if(!config?.enabled || config.automaticTab || isRunning()){status(config?.automaticTab?'automatic':`disabled:${JSON.stringify(config)}`);return;}
+      if(surface==='library')revealList();
       const page=surface==='library'?collectCurrentPage():collectDetailPage(surface);
-      if(page?.pendingImages){waitForData('waiting-image-urls');return;}
+      if(page?.pendingImages){
+        imageWaitStarted ??= Date.now();
+        if(Date.now()-imageWaitStarted<FEIGUA_IMAGE_GRACE_MS){status('waiting-image-urls');schedule();return;}
+      } else imageWaitStarted=null;
       if(!page?.rows?.length || page.diagnostics && page.diagnostics.candidateCount!==page.diagnostics.parsedCount){waitForData('waiting-rows');return;}
       waitingSince=null;
       page.surface=surface;
@@ -44,7 +49,7 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
   document.addEventListener('load',schedule,true);
   document.addEventListener('error',schedule,true);
   document.addEventListener('visibilitychange',schedule);
-  window.addEventListener('hashchange',()=>{last='';stable='';waitingSince=null;schedule();});
+  window.addEventListener('hashchange',()=>{last='';stable='';waitingSince=null;imageWaitStarted=null;schedule();});
   // Script-generated pagination is untrusted and never treated as user takeover.
   const takeover=event=>{
     if(!event.isTrusted || !isRunning())return;

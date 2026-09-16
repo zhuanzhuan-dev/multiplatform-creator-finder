@@ -107,7 +107,8 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
 export function RecentDecisions({ now, history = [], total = 0 }: { now: number; history?: Decision[]; total?: number }) {
   const decisions = history;
   const visibleDecisions = decisions.slice(0, COLLAPSED_DECISION_COUNT);
-  const openDecisionHistory = () => chrome.tabs.create({ url: recentHistoryUrl() });
+  const openLocalHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
+  const openWorkbenchHistory = () => chrome.tabs.create({ url: recentHistoryUrl() });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
       <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">近 24 小时 · 最近 {visibleDecisions.length} 条</span></div>
@@ -132,13 +133,14 @@ export function RecentDecisions({ now, history = [], total = 0 }: { now: number;
           );
         })}
       </div>
-      <button
-        className="decision-toggle"
-        type="button"
-        onClick={() => void openDecisionHistory()}
-      >
-        查看近 24 小时记录{total ? `（${total}）` : ""}
-      </button>
+      <div className="decision-links">
+        <button className="decision-toggle" type="button" onClick={() => void openLocalHistory()}>
+          本机近 24 小时记录{total ? `（${total}）` : ""}
+        </button>
+        <button className="decision-toggle" type="button" onClick={() => void openWorkbenchHistory()}>
+          研究台最近记录
+        </button>
+      </div>
     </section>
   );
 }

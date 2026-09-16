@@ -86,7 +86,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
         <label className="field">每批采集页数<input type="number" min="1" max="500" step="1" value={limit} disabled={active || saving} onChange={event=>setLimit(event.target.value)} required /></label>
         <label className="field">翻页最短等待（秒）<input type="number" min="1" max="30" step="0.1" value={minDelay} disabled={active || saving} onChange={event=>setMinDelay(event.target.value)} required /></label>
         <label className="field">翻页最长等待（秒）<input type="number" min={minDelay || '1'} max="30" step="0.1" value={maxDelay} disabled={active || saving} onChange={event=>setMaxDelay(event.target.value)} required /></label>
-        <p className="field-note">每页保存后在区间内随机等待，再翻下一页；另需等待列表加载。达到每批页数后自动暂停，建议休息至少 3 小时，可手动提前继续。到达当前筛选末页时结束本轮。随机等待仍有触发访问限制的风险。</p>
+        <p className="field-note">读取本页时先把列表滑到底触发懒加载。行数据稳定后即保存；头像或封面未加载齐最多再等 8 秒，不会因此暂停整轮。每页保存后在区间内随机等待再翻下一页。达到每批页数后自动暂停，建议休息至少 3 小时，可手动提前继续。到达当前筛选末页时结束本轮。随机等待仍有触发访问限制的风险。</p>
         <label className="field">整账号排除词<textarea rows={6} value={keywords} disabled={active || saving} onChange={event=>setKeywords(event.target.value)} /></label>
         <p className="field-note">每行一个词。视频标题、热词、话题或达人昵称命中时排除整个账号。修改只作用于新一轮飞瓜任务，暂停中的任务继续使用原规则。</p>
         <button type="submit" disabled={active || saving}>{saving?'保存中…':'保存飞瓜设置'}</button><p className="field-note" role="status">{errorMessage(notice)}</p>

@@ -1,7 +1,14 @@
 import { installFeiguaBrowsing } from './feigua-browse.js';
-import { collectCurrentPage, pageFingerprint, pagination, pageProblem } from './feigua-page.js';
+import { collectCurrentPage, pageFingerprint, pagination, pageProblem, revealList } from './feigua-page.js';
 
-import { feiguaDelayMs } from '../lib/feigua-policy.js';
+import { FEIGUA_IMAGE_GRACE_MS, FEIGUA_PAGE_WAIT_MS, FEIGUA_ROW_STABLE_MS, feiguaDelayMs } from '../lib/feigua-policy.js';
+
+function pageStabilityKey(page, pager) {
+  return JSON.stringify([
+    pager?.number || page.pageNumber || '',
+    page.rows.map(row => [row.authorName, row.videoId || row.title, row.likes, row.metrics, row.followerCount])
+  ]);
+}
 
 let current = null;
 function active(run) { return current === run && !run.canceled; }
@@ -16,29 +23,41 @@ async function wait(run, milliseconds = 750) {
   await send(run, 'DRA_WAIT', { until: Date.now() + milliseconds });
 }
 async function readStablePage(run, previous = null) {
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + FEIGUA_PAGE_WAIT_MS;
   const pageUrl = location.href;
   let stable = '';
   let stableSince = 0;
-  let pendingImages = 0;
+  let lastReady = null;
   while (active(run) && Date.now() < deadline) {
     if (location.href !== pageUrl) throw new Error('飞瓜页面已切换，请检查当前页面后继续');
     const problem = pageProblem();
     if (problem && problem !== 'loading') throw new Error(problem);
+    revealList();
     const page = collectCurrentPage();
-    pendingImages = page.pendingImages || 0;
+    const pendingImages = page.pendingImages || 0;
     page.fingerprint = pageFingerprint(page);
     const pager = pagination();
     const changed = !previous || page.fingerprint !== previous.fingerprint && (!previous.number || pager?.number !== previous.number);
     const completeRows = !page.diagnostics || page.diagnostics.candidateCount === page.diagnostics.parsedCount;
-    if (!problem && !pendingImages && page.rows.length && changed && completeRows) {
-      const content = JSON.stringify([pager?.number, page.rows]);
-      if (stable === content && Date.now() - stableSince >= 1500) return page;
-      if (stable !== content) { stable = content; stableSince = Date.now(); }
-    } else { stable = ''; stableSince = 0; }
+    if (!problem && page.rows.length && changed && completeRows) {
+      lastReady = page;
+      const content = pageStabilityKey(page, pager);
+      if (stable !== content) {
+        stable = content;
+        stableSince = Date.now();
+      }
+      const rowsSettled = Date.now() - stableSince >= FEIGUA_ROW_STABLE_MS;
+      const imagesReady = !pendingImages || Date.now() - stableSince >= FEIGUA_IMAGE_GRACE_MS;
+      if (rowsSettled && imagesReady) return page;
+    } else {
+      stable = '';
+      stableSince = 0;
+      if (!page.rows.length || !completeRows) lastReady = null;
+    }
     await wait(run);
   }
-  throw new Error(pendingImages ? `等待 60 秒后仍有 ${pendingImages} 个头像或封面地址未就绪，已暂停；请检查页面后继续` : previous ? '等待 60 秒后飞瓜列表仍未更新或稳定，已暂停，请检查页面后继续' : '等待 60 秒后仍未读到完整稳定的飞瓜视频列表，请检查加载或登录后继续');
+  if (lastReady?.rows?.length) return lastReady;
+  throw new Error(previous ? '等待 60 秒后飞瓜列表仍未更新或稳定，已暂停，请检查页面后继续' : '等待 60 秒后仍未读到完整稳定的飞瓜视频列表，请检查加载或登录后继续');
 }
 async function loop(run) {
   try {

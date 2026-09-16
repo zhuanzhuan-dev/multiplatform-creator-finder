@@ -227,6 +227,69 @@ import * as core from "../lib/feigua-parser.js";
 
 export { collectCurrentPage };
 
+function overflowY(element) {
+  try {
+    const style = globalThis.getComputedStyle?.(element);
+    return String(style?.overflowY || style?.overflow || "");
+  } catch {
+    return "";
+  }
+}
+
+function canScroll(element) {
+  if (!element || typeof element.scrollHeight !== "number") return false;
+  const overflow = overflowY(element);
+  const allows = !overflow || /(auto|scroll|overlay)/.test(overflow);
+  return allows && element.scrollHeight > (element.clientHeight || 0) + 8;
+}
+
+export function listScrollRoots(root = globalThis.document) {
+  if (!root?.querySelectorAll) return [];
+  const known = [".el-table__body-wrapper", ".el-scrollbar__wrap", "[class*='list-content']", "[class*='video-list']", "[class*='table-body']"]
+    .flatMap((selector) => Array.from(root.querySelectorAll(selector)));
+  const ancestors = [];
+  let current = root.querySelector(".list-row")?.parentElement;
+  while (current && current !== root.body && current !== root.documentElement) {
+    ancestors.push(current);
+    current = current.parentElement;
+  }
+  const unique = [];
+  for (const node of [...known, ...ancestors]) {
+    if (!canScroll(node) || unique.includes(node)) continue;
+    unique.push(node);
+  }
+  const page = root.scrollingElement || root.documentElement || root.body;
+  if (canScroll(page) && !unique.includes(page)) unique.push(page);
+  return unique;
+}
+
+export function revealList(root = globalThis.document) {
+  if (!root?.querySelectorAll) return { scrolled: false, atEnd: true, count: 0 };
+  const nodes = listScrollRoots(root);
+  let scrolled = false;
+  let atEnd = true;
+  for (const node of nodes) {
+    const max = Math.max(0, node.scrollHeight - (node.clientHeight || 0));
+    if ((node.scrollTop || 0) < max - 2) {
+      node.scrollTop = max;
+      scrolled = true;
+    }
+    if ((node.scrollTop || 0) < max - 2) atEnd = false;
+  }
+  const rows = Array.from(root.querySelectorAll(".list-row") || []);
+  const last = rows[rows.length - 1];
+  if (last?.scrollIntoView) {
+    last.scrollIntoView({ block: "end", inline: "nearest" });
+    scrolled = true;
+  }
+  if (!nodes.length && root.defaultView?.scrollTo) {
+    const height = Math.max(root.documentElement?.scrollHeight || 0, root.body?.scrollHeight || 0);
+    root.defaultView.scrollTo(0, height);
+    scrolled = height > 0;
+  }
+  return { scrolled, atEnd: !nodes.length || atEnd, count: nodes.length };
+}
+
 export function imageUrl(element) {
   const image = element?.querySelector?.('img') || element;
   if (!image) return '';
