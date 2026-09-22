@@ -1,0 +1,6 @@
+schema: spec-driven
+
+context: |
+  用简体中文写规格正文。保留 OpenSpec 的英文标题（Purpose、Requirement、Scenario）和 SHALL / MUST。
+  这是 Chrome 扩展「多平台自动找号助手」。B 站采集走已登录网页的官网接口，不使用付费 API，也不把开源仓库当作运行时依赖。
+  字段对照以 2026-09-22 对公开接口的实测为准。接口改版后以新的实测更新本规格。

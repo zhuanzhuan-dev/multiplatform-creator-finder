@@ -137,9 +137,15 @@ function collectBilibili(observation,profile,decision,owner) {
       dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
       action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons}});
     payload.comment_count=observation.comments ?? null;payload.favorite_count=observation.favorites ?? null;
+    payload.share_count=observation.shares ?? null;
     Object.assign(payload.rpa_feedback,{source:observation.feedSurface==='popular'?'bilibili-popular':'bilibili-web-recommend',account_platform:'bilibili',bilibili_mid:observation.authorId,
       bilibili_bvid:observation.videoId || '',no_profile_navigation:true,review_required:Boolean(decision.needsReview),
       play_count:observation.plays ?? null,comment_count:observation.comments ?? null,danmaku_count:observation.danmaku ?? null,
+      coin_count:observation.coins ?? null,share_count:observation.shares ?? null,desc:observation.description || '',
+      author_video_count:profile?.videoCount ?? observation.authorArchiveCount ?? null,
+      author_archives_complete:Boolean(profile?.archivesComplete || observation.authorArchivesComplete),
+      author_archives:Array.isArray(observation.authorArchives) ? observation.authorArchives : [],
+      view_detail:observation.viewDetail || null,
       tname:observation.tname || '',feed_surface:observation.feedSurface || 'recommend',rcmd_reason:observation.rcmdReason || ''});
     addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner});
     await persistWorkData();

@@ -1,6 +1,6 @@
 import {
   assertBilibiliLoggedIn,
-  fetchBilibiliFollowerCount,
+  enrichMatchedBilibili,
   fetchBilibiliPopular,
   fetchBilibiliRecommend,
   mapBilibiliPopularItem,
@@ -83,22 +83,29 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         if (!observations.length) throw Error("本批推荐未返回可用视频，已暂停");
       }
 
-      // 一批接口结果连续处理，不在单条之间故意等待；间隔只发生在批与批之间。
-      for (const observation of observations) {
+      // 淘汰的条目连续处理；命中后再慢速补视频详情和作者投稿，批与批之间仍有间隔。
+      for (const item of observations) {
         assert();
-        if (seen.has(observation.videoId)) continue;
+        if (seen.has(item.videoId)) continue;
         const started = Date.now();
         await progress("submit", { freshIdx, popularPage });
-        const matched = evaluateBilibiliVideoRules(observation, message.rules).matched;
+        const matched = evaluateBilibiliVideoRules(item, message.rules).matched;
+        let observation = item;
         let followers = null;
+        let extra = {};
         if (matched) {
-          try {
-            followers = await fetchBilibiliFollowerCount(observation.authorId);
-          } catch {
-            followers = null;
-          }
+          extra = await enrichMatchedBilibili(observation, {
+            settings: message.settings,
+            delay: async (seconds) => {
+              await progress("transition", { freshIdx, popularPage, waitUntil: Date.now() + seconds * 1000 });
+              await sleep(seconds * 1000);
+            }
+          });
+          observation = extra.observation;
+          followers = extra.followers;
         }
-        const profile = mapBilibiliProfile(observation, followers);
+        await progress("submit", { freshIdx, popularPage });
+        const profile = mapBilibiliProfile(observation, followers, extra);
         const result = await send("DRA_BILIBILI_VIDEO", {
           observation: { ...observation, dwellSeconds: (Date.now() - started) / 1000 },
           profile,
