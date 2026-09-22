@@ -67,6 +67,9 @@ export function decisionMetricLine(decision: {
 
 export function decisionMeta(code = ""): { label: string; tone: string } {
   const value = code.toUpperCase();
+  if (value === "FEIGUA_MATCHED") return {label:"规则命中",tone:"good"};
+  if (value === "FEIGUA_EXCLUDED") return {label:"已淘汰",tone:"reject"};
+  if (value === "FEIGUA_PAGE_TIMEOUT") return {label:"页面读取超时",tone:"reject"};
   if (value === "FEIGUA_OBSERVED" || value === "XINGTU_OBSERVED") return {label:"浏览已采集",tone:"review"};
   if (value === "ACCEPTED") return { label: "符合条件", tone: "good" };
   if (value.includes("REVIEW")) return { label: "需人工确认", tone: "review" };

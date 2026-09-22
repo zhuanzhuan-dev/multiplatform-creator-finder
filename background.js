@@ -3,6 +3,8 @@ import { createBilibiliRuntime, splitLegacyBilibiliStorage, BILIBILI_ALARM, BILI
 import { bilibiliFeedbackFields } from './lib/bilibili-api.js';
 import { mergeBilibiliRules, validateBilibiliRules } from './lib/bilibili-rules.js';
 import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, normalizeXingtuObservation, observationRecord as feiguaObservationRecord, xingtuObservationRecord, observationStatus, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
+import { evaluateFeiguaRules } from './lib/feigua-rules.js';
+import { rowAccountKey } from './lib/feigua-parser.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { createXingtuRuntime, XINGTU_ALARM, XINGTU_STOP_ALARM } from "./lib/xingtu-task.js";
 import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
@@ -122,8 +124,8 @@ const feigua = createFeiguaRuntime({
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload,
   savePage:async(page,runId,legacy=false)=>{
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy && settings.feiguaUploadEnabled===true && !feigua.state().runSettings?.dryRun})));
-    await stageFeiguaObservations();
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy && !feigua.state().runSettings?.dryRun})));
+    await scheduleUpload();
     return items;
   }
 });
@@ -1029,9 +1031,7 @@ function uploadableOutbox() {
     if (item.transitionPending || Number(item.retryAt || 0)>Date.now()) return false;
     if (!["pending", "write-error", "failed"].includes(item.status)) return false;
     const record = item.payload;
-    const isFeigua = record?.rpa_feedback?.source_platform === 'feigua' || record?.rpa_feedback?.source === 'feigua-video-library' || item.sessionId && item.sessionId === feigua.state().runId;
     const isXingtu = record?.rpa_feedback?.source_platform === 'xingtu' || record?.rpa_feedback?.source === 'xingtu-author-market' || item.sessionId && item.sessionId === xingtu.state().runId;
-    if (isFeigua && settings.feiguaUploadEnabled !== true) return false;
     if (isXingtu && xingtuConfig.settings.xingtuUploadEnabled !== true) return false;
     return record && typeof record === "object" && typeof record.record_id === "string" && Number.isInteger(record.feed_index);
   });
@@ -1042,7 +1042,7 @@ async function scheduleUpload(force = false, retry = false) {
   await stageXingtuObservations();
   const pending = uploadableOutbox();
   if (!pending.length || !cloudReady()) {
-    const retries=outbox.filter(item=>['pending','write-error','failed'].includes(item.status) && item.retryAt>Date.now() && (settings.feiguaUploadEnabled===true || item.payload?.rpa_feedback?.source_platform!=='feigua') && (xingtuConfig.settings.xingtuUploadEnabled===true || item.payload?.rpa_feedback?.source_platform!=='xingtu'));
+    const retries=outbox.filter(item=>['pending','write-error','failed'].includes(item.status) && item.retryAt>Date.now() && (xingtuConfig.settings.xingtuUploadEnabled===true || item.payload?.rpa_feedback?.source_platform!=='xingtu'));
     if(cloudReady() && retries.length)await chrome.alarms.create(UPLOAD_ALARM,{when:Math.min(...retries.map(item=>item.retryAt))});
     else await chrome.alarms.clear(UPLOAD_ALARM);
     return;
@@ -1546,6 +1546,7 @@ async function saveConfiguration(message) {
   if (configPlatform === 'douyin') {
     for (const key of Object.keys(current.settings).filter(key=>key.startsWith('feigua') || key.startsWith('xingtu'))) nextSettings[key]=current.settings[key];
     nextRules.feiguaKeywords=current.rules.feiguaKeywords;
+    nextRules.feiguaPositiveKeywords=current.rules.feiguaPositiveKeywords;
     nextRules.xingtuKeywords=current.rules.xingtuKeywords;
   }
   const problems = [...validateSettings(nextSettings), ...validateRuleFn(nextRules), ...validateSchedule(nextSettings.schedule)];
@@ -2055,7 +2056,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     await initialize();
     if (sender.tab?.id === kuaishou.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_KUAISHOU_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return kuaishou.message(message,sender);
     if (bilibiliForTab(sender.tab?.id) && ['DRA_WAIT','DRA_PROGRESS','DRA_BILIBILI_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return bilibiliForTab(sender.tab.id).message(message,sender);
-    if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
+    if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_PAGE_TIMEOUT','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
     if (sender.tab?.id === xingtu.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_XINGTU_PAGE','DRA_XINGTU_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return xingtu.message(message,sender);
     if (['DRA_PAUSE','DRA_STOP','DRA_RESUME'].includes(message?.type) && message.runId) {
       const target = message.platform === 'kuaishou' ? kuaishou.state() : (message.platform === 'bilibili' || message.platform === 'bilibili-popular') ? bilibiliBySelection(message.platform).state() : message.platform === 'feigua' ? feigua.state() : message.platform === 'xingtu' ? xingtu.state() : state;
@@ -2261,8 +2262,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if(!Number.isInteger(maxPages) || maxPages<1 || maxPages>500) throw Error('页数需为 1 至 500 的整数');
           if(!Number.isFinite(minSeconds) || !Number.isFinite(maxSeconds) || minSeconds<1 || maxSeconds>30 || maxSeconds<minSeconds) throw Error('翻页间隔需为 1 至 30 秒，最大值应大于或等于最小值');
           if(!Array.isArray(message.keywords) || message.keywords.length>200 || message.keywords.some(word=>typeof word!=='string'||word.length>100)) throw Error('规避词格式不正确，最多 200 个词，每个词最多 100 字');
+          if(!Array.isArray(message.positiveKeywords) || message.positiveKeywords.length>200 || message.positiveKeywords.some(word=>typeof word!=='string'||word.length>100)) throw Error('正向关键词格式不正确，最多 200 个词，每个词最多 100 字');
           settings={...settings,feiguaTarget:{maxPages},feiguaDelay:{minSeconds,maxSeconds},...(message.schedule ? {feiguaSchedule:scheduleFrom(message.schedule, true),feiguaScheduleOptIn:true} : {})};
-          rules={...rules,feiguaKeywords:[...new Set(message.keywords.map(word=>word.trim()).filter(Boolean))]};
+          rules={...rules,feiguaKeywords:[...new Set(message.keywords.map(word=>word.trim()).filter(Boolean))],feiguaPositiveKeywords:[...new Set(message.positiveKeywords.map(word=>word.trim()).filter(Boolean))]};
           await chrome.storage.local.set({[STORAGE_KEYS.settings]:settings,[STORAGE_KEYS.rules]:rules});
           if (message.schedule) await syncScheduleAlarm();
           return {ok:true};
@@ -2419,10 +2421,10 @@ async function captureBrowsePage(page,sender) {
   const day=new Date().toISOString().slice(0,10);
   const runId=`feigua-browse:${day}`;
   try {
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,'browse'),uploadEligible:settings.feiguaUploadEnabled===true && !settings.dryRun})));
-    await stageFeiguaObservations();
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation({...row,ruleDecision:evaluateFeiguaRules(page.rows.filter(item=>rowAccountKey(item)===rowAccountKey(row)),rules)},page,runId,'browse'),uploadEligible:!settings.dryRun})));
+    await scheduleUpload();
     const owner={runId,startedAt:page.capturedAt,route:{platform:'feigua'}};
-    for(const item of items)recordDecision({code:'FEIGUA_OBSERVED',reasons:['浏览采集已保存；自动翻页保持暂停']},item,null,owner);
+    for(const item of items)recordDecision(item.raw.ruleDecision,item,null,owner);
     browseState.lastCapturedAt=page.capturedAt; browseState.lastPageUrl=page.pageUrl; browseState.lastError='';
     await chrome.storage.local.set({draFeiguaBrowsing:browseState});
     await flushDecisionHistory();
@@ -2439,7 +2441,6 @@ async function captureBrowsePage(page,sender) {
 let stagingObservations=null;
 let stagingXingtuObservations=null;
 function stageFeiguaObservations() {
-  if(settings.feiguaUploadEnabled!==true)return Promise.resolve();
   if(stagingObservations)return stagingObservations;
   stagingObservations=(async()=>{
     const items=await pendingObservations();

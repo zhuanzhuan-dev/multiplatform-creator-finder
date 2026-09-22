@@ -189,15 +189,14 @@ import * as core from "../lib/feigua-parser.js";
     const headers = Array.from(container?.querySelector('.list-hd')?.children || []).filter(e => e.classList.contains('col-item'));
     const cells = Array.from(row.children).filter(e => e.classList.contains('col-item'));
     parsed.metrics = {};
-    if (headers.length === cells.length) headers.forEach((header, index) => {
-      const label = (header.innerText || header.textContent || '').trim();
-      if (['传播指数','播放','点赞','评论','分享','收藏','发布时间'].includes(label)) {
-        parsed.metrics[label] = (cells[index].innerText || '').replace(/\s+/g, ' ').trim();
-      }
+    parsed.columns = collectColumns(headers, cells);
+    parsed.columns.forEach(({label, value}) => {
+      if (label && !['视频内容','达人'].includes(label)) parsed.metrics[label] = value;
     });
     parsed.videoUrl = row.querySelector('.video-cover-link[href]')?.href || '';
     parsed.videoDetailUrl = row.querySelector('.video-title a[href]')?.href || '';
     parsed.hotWords = Array.from(row.querySelectorAll('.video-info .el-tag')).map(e => e.textContent.trim()).filter(Boolean);
+    parsed.searchText = [parsed.title, parsed.topics.join(' '), parsed.hotWords.join(' '), parsed.authorName].join(' ');
     return parsed.authorName ? parsed : null;
   }
 
@@ -226,6 +225,13 @@ import * as core from "../lib/feigua-parser.js";
 
 
 export { collectCurrentPage };
+
+export function collectColumns(headers, cells) {
+  return cells.map((cell, index) => ({
+    label: headers.length === cells.length ? (headers[index].innerText || headers[index].textContent || '').trim() : '',
+    value: (cell.innerText || cell.textContent || '').replace(/\s+/g, ' ').trim()
+  }));
+}
 
 function overflowY(element) {
   try {

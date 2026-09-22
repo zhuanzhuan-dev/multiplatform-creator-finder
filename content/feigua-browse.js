@@ -1,4 +1,4 @@
-import { collectCurrentPage, collectDetailPage, browsingSurface, pageAccessProblem, revealList } from './feigua-page.js';
+import { collectCurrentPage, collectDetailPage, browsingSurface, pageAccessProblem } from './feigua-page.js';
 import { FEIGUA_IMAGE_GRACE_MS } from '../lib/feigua-policy.js';
 // Passive collection never clicks or changes the page. Mutation bursts settle twice.
 export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
@@ -25,7 +25,7 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
       if(!surface || document.visibilityState!=='visible' || problem){stable='';if(problem==='loading')waitForData('loading');return;}
       const config=await send({type:'DRA_FEIGUA_BROWSE_STATUS',surface});
       if(!config?.enabled || config.automaticTab || isRunning()){status(config?.automaticTab?'automatic':`disabled:${JSON.stringify(config)}`);return;}
-      if(surface==='library')revealList();
+      // Passive capture reads rendered rows without moving the user's viewport.
       const page=surface==='library'?collectCurrentPage():collectDetailPage(surface);
       if(page?.pendingImages){
         imageWaitStarted ??= Date.now();
@@ -62,7 +62,15 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
   };
   document.addEventListener('click',takeover,true);
   document.addEventListener('change',takeover,true);
-  chrome.storage.onChanged?.addListener((_changes,area)=>{if(area==='local')schedule();});
+  chrome.storage.onChanged?.addListener((changes,area)=>{
+    if(area!=='local')return;
+    const changedRules=changes.draRules;
+    const signature=rules=>JSON.stringify([rules?.feiguaKeywords || [],rules?.feiguaPositiveKeywords || []]);
+    if(changedRules && signature(changedRules.oldValue)!==signature(changedRules.newValue)) {
+      last='';stable='';
+    }
+    schedule();
+  });
   schedule();
   return ()=>{stopped=true;clearTimeout(timer);observer.disconnect();};
 }

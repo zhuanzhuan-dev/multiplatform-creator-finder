@@ -27,7 +27,7 @@ async function readStablePage(run, previous = null) {
   const pageUrl = location.href;
   let stable = '';
   let stableSince = 0;
-  let lastReady = null;
+  let lastPage = null;
   while (active(run) && Date.now() < deadline) {
     if (location.href !== pageUrl) throw new Error('飞瓜页面已切换，请检查当前页面后继续');
     const problem = pageProblem();
@@ -36,11 +36,11 @@ async function readStablePage(run, previous = null) {
     const page = collectCurrentPage();
     const pendingImages = page.pendingImages || 0;
     page.fingerprint = pageFingerprint(page);
+    lastPage = page;
     const pager = pagination();
     const changed = !previous || page.fingerprint !== previous.fingerprint && (!previous.number || pager?.number !== previous.number);
     const completeRows = !page.diagnostics || page.diagnostics.candidateCount === page.diagnostics.parsedCount;
     if (!problem && page.rows.length && changed && completeRows) {
-      lastReady = page;
       const content = pageStabilityKey(page, pager);
       if (stable !== content) {
         stable = content;
@@ -52,40 +52,67 @@ async function readStablePage(run, previous = null) {
     } else {
       stable = '';
       stableSince = 0;
-      if (!page.rows.length || !completeRows) lastReady = null;
     }
     await wait(run);
   }
-  if (lastReady?.rows?.length) return lastReady;
-  throw new Error(previous ? '等待 60 秒后飞瓜列表仍未更新或稳定，已暂停，请检查页面后继续' : '等待 60 秒后仍未读到完整稳定的飞瓜视频列表，请检查加载或登录后继续');
+  const error = new Error('等待 30 秒后列表仍未更新或稳定，尝试翻下一页；本次未计为采集成功');
+  error.code = 'FEIGUA_PAGE_TIMEOUT';
+  error.page = lastPage;
+  throw error;
 }
 async function loop(run) {
   try {
-    let page = null;
+    let previous = null;
     while (active(run)) {
       await send(run, 'DRA_PROGRESS', { phase: 'read' });
-      page ||= await readStablePage(run);
-      await send(run, 'DRA_PROGRESS', { phase: 'submit' });
-      const result = await send(run, 'DRA_FEIGUA_PAGE', { page: {...page, last: pagination()?.last === true} });
-      if (!result?.continue) { run.canceled = true; return; }
+      let page = null;
+      let timedOut = false;
+      try {
+        page = await readStablePage(run, previous);
+      } catch (error) {
+        if (error.code !== 'FEIGUA_PAGE_TIMEOUT') throw error;
+        timedOut = true;
+        page = error.page;
+        await send(run, 'DRA_FEIGUA_PAGE_TIMEOUT', {
+          pageUrl: location.href,
+          pageNumber: pagination()?.number || page?.pageNumber || '',
+          reason: error.message
+        });
+      }
+      if (!timedOut) {
+        await send(run, 'DRA_PROGRESS', { phase: 'submit' });
+        const result = await send(run, 'DRA_FEIGUA_PAGE', { page: {...page, last: pagination()?.last === true} });
+        if (!result?.continue) { run.canceled = true; return; }
+      }
       const pager = pagination();
-      if (!pager) throw new Error('未识别到唯一的飞瓜分页控件，已保存本页并暂停');
+      if (!pager) throw new Error('未识别到可用的飞瓜分页控件，无法点击下一页，请检查页面后继续');
       if (pager.last) {
+        if (pageProblem() === 'loading') throw new Error('飞瓜仍在加载且下一页按钮不可用，请检查页面后继续');
         await send(run, 'DRA_FEIGUA_COMPLETE');
         run.canceled = true;
         return;
       }
       await send(run, 'DRA_PROGRESS', { phase: 'transition' });
-      // Allow the user to pause between pages; use the worker clock in background tabs.
       await wait(run, feiguaDelayMs(run.settings));
       const problem = pageProblem();
-      if (problem) throw new Error('飞瓜页面状态发生变化，请检查后继续');
-      const check = collectCurrentPage();
-      if (pageFingerprint(check) !== page.fingerprint) throw new Error('采集后列表被改变，请检查筛选条件后继续');
+      if (problem && problem !== 'loading') throw new Error(problem);
+      const nextPager = pagination();
+      if (!nextPager) throw new Error('未识别到可用的飞瓜分页控件，无法点击下一页，请检查页面后继续');
+      // A site-driven refresh is read as a new page; trusted user takeover cancels the run separately.
+      if (nextPager.number !== pager.number || !timedOut && (problem === 'loading' || pageFingerprint(collectCurrentPage()) !== page.fingerprint)) {
+        previous = null;
+        continue;
+      }
+      if (nextPager.last) {
+        if (problem === 'loading') throw new Error('飞瓜仍在加载且下一页按钮不可用，请检查页面后继续');
+        await send(run, 'DRA_FEIGUA_COMPLETE');
+        run.canceled = true;
+        return;
+      }
       if (!active(run)) return;
-      pager.next.scrollIntoView({ block: 'center' });
-      pager.next.click();
-      page = await readStablePage(run, { fingerprint: page.fingerprint, number: pager.number });
+      previous = { fingerprint: page?.fingerprint || '', number: nextPager.number };
+      nextPager.next.scrollIntoView({ block: 'center' });
+      nextPager.next.click();
       await send(run, 'DRA_PROGRESS', { phase: 'idle', transitionOk: true });
     }
   } catch (error) {

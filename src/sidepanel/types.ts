@@ -6,6 +6,7 @@ export interface Stats {
   scanned?: number;
   matched?: number;
   reviewQueued?: number;
+  ruleMatched?: number;
   newCreators?: number;
   duplicates?: number;
   notInterested?: number;
@@ -43,6 +44,7 @@ export interface Decision {
 }
 
 export interface RunState {
+  runSettings?: Partial<Settings>;
   engagement?: { policy: { rate: number; like: boolean; collect: boolean; follow: boolean }; videos: number; used: Record<string, number>; sent: Record<string, number>; lastResult: string };
   runId?: string;
   elapsedMs?: number | null;
@@ -110,7 +112,6 @@ export interface Settings {
   xingtuDelay?: { minSeconds: number; maxSeconds: number };
   bilibiliBatchDelay?: { minSeconds: number; maxSeconds: number };
   feiguaSchedule?: ScheduleSettings;
-  feiguaUploadEnabled?: boolean;
   xingtuUploadEnabled?: boolean;
   engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
   dwell?: DwellPolicy;
