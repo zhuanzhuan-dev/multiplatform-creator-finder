@@ -27,8 +27,8 @@
 
 - **GIVEN** 推荐或热门返回一条播放量低于直接剔除线的视频
 - **WHEN** 系统完成规则判断
-- **THEN** 上传只包含该列表卡片上保留的字段
-- **AND** 不出现 `view_detail` 和 `author_archives`
+- **THEN** 上传包含这张列表卡片（`feed_item`）
+- **AND** 不出现 `view_detail`、`relation_stat` 和 `author_archives`
 
 ### Requirement: 规则命中后慢速补三次
 
@@ -59,9 +59,13 @@
 - **THEN** 后续接口可以签名
 - **AND** 上传记录里没有 nav 的用户资料
 
-### Requirement: 首页推荐字段
+### Requirement: 视频卡片原样上传
 
-`/x/web-interface/wbi/index/top/feed/rcmd` 的每条视频卡片 SHALL 只上传下表标为「留」的字段。该接口的 `stat` 只有播放、点赞、弹幕和播放时长，没有评论、投币、收藏、转发。
+推荐和综合热门返回的每条视频卡片 SHALL 原样写入上传记录的 `feed_item`。规范化后的播放、点赞等字段仍写入记录顶层，供现有筛选使用。响应外层的 `business_card`、`floor_info`、`user_feature`、`preload_expose_pct`、`preload_floor_expose_pct`、`mid`（当前登录用户）SHALL NOT 上传。
+
+2026-09-22 实测综合热门单条卡片约 1.6–2.4KB。这些字段写在 `rpa_feedback` 的 JSON 里，不另建数据库列。
+
+`/x/web-interface/wbi/index/top/feed/rcmd` 的视频卡片进入 `feed_item`。该接口的 `stat` 只有播放、点赞、弹幕和播放时长，没有评论、投币、收藏、转发。
 
 | 字段 | 含义 | 上传 |
 |---|---|---|
@@ -74,36 +78,25 @@
 | `owner.mid` / `name` / `face` | 作者 id、昵称、头像 | 留 |
 | `stat.view` / `like` / `danmaku` | 播放、点赞、弹幕 | 留 |
 | `rcmd_reason.content` | 推荐理由文案 | 留 |
-| `id` | avid | 没留 |
-| `cid` | 分 P 的 cid | 没留 |
-| `goto` | 卡片类型，视频是 `av` | 没留 |
-| `pic_4_3` | 4:3 封面 | 没留 |
-| `stat.vt` | 播放时长 | 没留 |
-| `av_feature` | 推荐内部特征串 | 没留 |
-| `is_followed` | 是否已关注 | 没留 |
-| `rcmd_reason.reason_type` | 推荐理由类型 | 没留 |
-| `show_info` | 展示标记 | 没留 |
-| `track_id` | 推荐追踪 id | 没留 |
-| `pos` | 卡片位置 | 没留 |
-| `room_info` | 直播间 | 没留 |
-| `ogv_info` | 影视剧信息 | 没留 |
-| `business_info` | 商业卡信息 | 没留 |
-| `is_stock` | 是否库存推荐 | 没留 |
-| `enable_vt` / `vt_display` | 是否展示播放时长、展示文案 | 没留 |
-| `dislike_switch` / `dislike_switch_pc` | 不喜欢开关 | 没留 |
+| `id` | avid | 留，在 `feed_item` |
+| `cid` | 分 P 的 cid | 留，在 `feed_item` |
+| `goto` | 卡片类型，视频是 `av` | 留，在 `feed_item` |
+| `pic_4_3` | 4:3 封面 | 留，在 `feed_item` |
+| `stat.vt` | 播放时长 | 留，在 `feed_item` |
+| `av_feature` | 推荐内部特征串 | 留，在 `feed_item` |
+| `is_followed` | 是否已关注 | 留，在 `feed_item` |
+| `rcmd_reason.reason_type` | 推荐理由类型 | 留，在 `feed_item` |
+| `show_info` | 展示标记 | 留，在 `feed_item` |
+| `track_id` | 推荐追踪 id | 留，在 `feed_item` |
+| `pos` | 卡片位置 | 留，在 `feed_item` |
+| `room_info` | 直播间 | 留，在 `feed_item` |
+| `ogv_info` | 影视剧信息 | 留，在 `feed_item` |
+| `business_info` | 商业卡信息 | 留，在 `feed_item` |
+| `is_stock` | 是否库存推荐 | 留，在 `feed_item` |
+| `enable_vt` / `vt_display` | 是否展示播放时长、展示文案 | 留，在 `feed_item` |
+| `dislike_switch` / `dislike_switch_pc` | 不喜欢开关 | 留，在 `feed_item` |
 
-响应外层的 `business_card`、`floor_info`、`user_feature`、`preload_expose_pct`、`preload_floor_expose_pct`、`mid`（当前登录用户）SHALL NOT 上传。扩展本地观察 MAY 保存整张卡片，研究台上传不得因此带上「没留」字段。
-
-#### Scenario: 推荐卡片含追踪 id
-
-- **GIVEN** 推荐卡片同时有 `bvid` 和 `track_id`
-- **WHEN** 该视频被上传
-- **THEN** 上传含有这个 bvid
-- **AND** 上传不含 `track_id`
-
-### Requirement: 综合热门字段
-
-`/x/web-interface/popular` 的每条视频 SHALL 只上传下表标为「留」的字段。
+`/x/web-interface/popular` 的视频卡片同样进入 `feed_item`。
 
 | 字段 | 含义 | 上传 |
 |---|---|---|
@@ -117,40 +110,48 @@
 | `owner.mid` / `name` / `face` | 作者 id、昵称、头像 | 留 |
 | `stat.view` / `like` / `danmaku` / `reply` / `favorite` / `share` | 播放、点赞、弹幕、评论、收藏、转发 | 留 |
 | `rcmd_reason.content` | 推荐理由文案 | 留 |
-| `aid` | avid | 没留 |
-| `videos` | 分 P 数 | 没留 |
-| `tid` | 分区 id | 没留 |
-| `copyright` | 版权类型 | 没留 |
-| `ctime` | 创建时间 | 没留 |
-| `desc` | 简介 | 没留 |
-| `state` | 稿件状态 | 没留 |
-| `mission_id` | 活动 id | 没留 |
-| `dynamic` | 动态文案 | 没留 |
-| `cid` | 分 P 的 cid | 没留 |
-| `season_id` / `season_type` | 合集 id、类型 | 没留 |
-| `first_frame` | 首帧图 | 没留 |
-| `pub_location` | 发布地 | 没留 |
-| `cover43` | 4:3 封面 | 没留 |
-| `tidv2` / `tnamev2` / `pid_v2` / `pid_name_v2` / `attribute_v3` | 新分区 | 没留 |
-| `current_state` / `global_state` | 审核/状态 | 没留 |
-| `is_ogv` / `ogv_info` | 是否影视剧、影视信息 | 没留 |
-| `enable_vt` | 是否展示播放时长 | 没留 |
-| `ai_rcmd` | 算法推荐信息 | 没留 |
-| `rcmd_reason.corner_mark` | 角标 | 没留 |
-| `stat.aid` / `coin` / `now_rank` / `his_rank` / `dislike` / `vt` / `vv` / `fav_g` / `like_g` | 投币、排名、点踩、播放时长 | 没留 |
-| `rights` | 权限整包：充电、下载、付费、禁转载、合作、自动播放 | 没留 |
-| `dimension` | 宽、高、旋转 | 没留 |
+| `aid` | avid | 留，在 `feed_item` |
+| `videos` | 分 P 数 | 留，在 `feed_item` |
+| `tid` | 分区 id | 留，在 `feed_item` |
+| `copyright` | 版权类型 | 留，在 `feed_item` |
+| `ctime` | 创建时间 | 留，在 `feed_item` |
+| `desc` | 简介 | 留，在 `feed_item` |
+| `state` | 稿件状态 | 留，在 `feed_item` |
+| `mission_id` | 活动 id | 留，在 `feed_item` |
+| `dynamic` | 动态文案 | 留，在 `feed_item` |
+| `cid` | 分 P 的 cid | 留，在 `feed_item` |
+| `season_id` / `season_type` | 合集 id、类型 | 留，在 `feed_item` |
+| `first_frame` | 首帧图 | 留，在 `feed_item` |
+| `pub_location` | 发布地 | 留，在 `feed_item` |
+| `cover43` | 4:3 封面 | 留，在 `feed_item` |
+| `tidv2` / `tnamev2` / `pid_v2` / `pid_name_v2` / `attribute_v3` | 新分区 | 留，在 `feed_item` |
+| `current_state` / `global_state` | 审核/状态 | 留，在 `feed_item` |
+| `is_ogv` / `ogv_info` | 是否影视剧、影视信息 | 留，在 `feed_item` |
+| `enable_vt` | 是否展示播放时长 | 留，在 `feed_item` |
+| `ai_rcmd` | 算法推荐信息 | 留，在 `feed_item` |
+| `rcmd_reason.corner_mark` | 角标 | 留，在 `feed_item` |
+| `stat.aid` / `coin` / `now_rank` / `his_rank` / `dislike` / `vt` / `vv` / `fav_g` / `like_g` | 投币、排名、点踩、播放时长 | 留，在 `feed_item` |
+| `rights` | 权限整包：充电、下载、付费、禁转载、合作、自动播放 | 留，在 `feed_item` |
+| `dimension` | 宽、高、旋转 | 留，在 `feed_item` |
+
+响应外层仍不上传，见本要求正文。
+
+#### Scenario: 推荐卡片含追踪 id
+
+- **GIVEN** 推荐卡片同时有 `bvid` 和 `track_id`
+- **WHEN** 该视频被上传
+- **THEN** `feed_item` 含有这个 bvid 和 `track_id`
+- **AND** 上传不含当前登录用户的 `user_feature`
 
 #### Scenario: 热门卡片含投币和简介
 
 - **GIVEN** 热门卡片含有 `stat.coin` 和 `desc`，且规则未命中
 - **WHEN** 该视频被上传
-- **THEN** 上传含有播放、点赞、弹幕、评论、收藏、转发
-- **AND** 上传不含这条卡片上的投币数和简介
+- **THEN** `feed_item` 含有这条卡片上的投币数和简介
 
-### Requirement: 视频详情字段
+### Requirement: 视频详情原样上传
 
-规则命中后，`/x/web-interface/wbi/view` SHALL 以下表标为「留」的字段写入 `view_detail`。系统 SHALL NOT 上传整包详情。
+规则命中后，`/x/web-interface/wbi/view` 的 `data` SHALL 原样写入 `view_detail`。单条观察 JSON 超过 90KB 时，系统 SHALL 先去掉 `view_detail.ugc_season`，并在 `view_detail_clipped` 记下 `ugc_season`。去掉后仍超过 90KB 时，系统 MAY 再按既有顺序丢掉推荐整卡和投稿简介。
 
 | 字段 | 含义 | 上传 |
 |---|---|---|
@@ -164,65 +165,71 @@
 | `copyright` | 版权类型 | 留 |
 | `videos` | 分 P 数 | 留 |
 | `stat.view` / `like` / `danmaku` / `reply` / `favorite` / `coin` / `share` | 播放、点赞、弹幕、评论、收藏、投币、转发 | 留 |
-| `owner` | 作者 id、昵称、头像 | 没留在详情包里；列表上已经留过 |
-| `tid_v2` / `tname_v2` | 新分区 | 没留 |
-| `ctime` | 创建时间 | 没留 |
-| `desc_v2` | 简介分段：`raw_text`、`type`、`biz_id` | 没留 |
-| `state` | 稿件状态 | 没留 |
-| `mission_id` | 活动 id | 没留 |
-| `dynamic` | 动态文案 | 没留 |
-| `cid` | 当前分 P | 没留 |
-| `dimension` | 宽、高、旋转 | 没留 |
-| `season_id` | 合集 id | 没留 |
-| `premiere` | 首播信息 | 没留 |
-| `teenage_mode` | 青少年模式 | 没留 |
-| `is_chargeable_season` | 付费合集 | 没留 |
-| `is_story` / `is_story_play` | 小视频/Story | 没留 |
-| `is_upower_exclusive` / `is_upower_play` / `is_upower_preview` / `is_upower_exclusive_with_qa` | 充电专属 | 没留 |
-| `enable_vt` / `vt_display` | 播放时长展示 | 没留 |
-| `is_hua_sheng` | 花绳标记 | 没留 |
-| `no_cache` | 是否禁缓存 | 没留 |
-| `is_season_display` | 是否展示合集 | 没留 |
-| `need_jump_bv` | 是否跳 BV | 没留 |
-| `disable_show_up_info` | 是否隐藏 UP 信息 | 没留 |
-| `is_view_self` | 是否仅自己可见 | 没留 |
-| `stat.now_rank` / `his_rank` / `dislike` / `evaluation` / `vt` | 排名、点踩、评分、播放时长 | 没留 |
-| `rights` | 权限：充电、下载、付费、禁转载、合作、互动视频、全景、禁分享 | 没留 |
-| `argue_info` | 争议提示：文案、类型、链接 | 没留 |
-| `pages` | 分 P 列表：cid、标题、时长、宽高、首帧、创建时间 | 没留 |
-| `subtitle` | 字幕 | 没留 |
-| `label` | 标签 | 没留 |
-| `ugc_season` | 合集：标题、封面、简介、集数、是否付费、各集 | 没留 |
-| `user_garb` | 装扮 | 没留 |
-| `honor_reply` | 荣誉，如每周必看 | 没留 |
-| `like_icon` | 点赞图标 | 没留 |
+| `owner` | 作者 id、昵称、头像 | 留，在 `view_detail` |
+| `tid_v2` / `tname_v2` | 新分区 | 留，在 `view_detail` |
+| `ctime` | 创建时间 | 留，在 `view_detail` |
+| `desc_v2` | 简介分段：`raw_text`、`type`、`biz_id` | 留，在 `view_detail` |
+| `state` | 稿件状态 | 留，在 `view_detail` |
+| `mission_id` | 活动 id | 留，在 `view_detail` |
+| `dynamic` | 动态文案 | 留，在 `view_detail` |
+| `cid` | 当前分 P | 留，在 `view_detail` |
+| `dimension` | 宽、高、旋转 | 留，在 `view_detail` |
+| `season_id` | 合集 id | 留，在 `view_detail` |
+| `premiere` | 首播信息 | 留，在 `view_detail` |
+| `teenage_mode` | 青少年模式 | 留，在 `view_detail` |
+| `is_chargeable_season` | 付费合集 | 留，在 `view_detail` |
+| `is_story` / `is_story_play` | 小视频/Story | 留，在 `view_detail` |
+| `is_upower_exclusive` / `is_upower_play` / `is_upower_preview` / `is_upower_exclusive_with_qa` | 充电专属 | 留，在 `view_detail` |
+| `enable_vt` / `vt_display` | 播放时长展示 | 留，在 `view_detail` |
+| `is_hua_sheng` | 花绳标记 | 留，在 `view_detail` |
+| `no_cache` | 是否禁缓存 | 留，在 `view_detail` |
+| `is_season_display` | 是否展示合集 | 留，在 `view_detail` |
+| `need_jump_bv` | 是否跳 BV | 留，在 `view_detail` |
+| `disable_show_up_info` | 是否隐藏 UP 信息 | 留，在 `view_detail` |
+| `is_view_self` | 是否仅自己可见 | 留，在 `view_detail` |
+| `stat.now_rank` / `his_rank` / `dislike` / `evaluation` / `vt` | 排名、点踩、评分、播放时长 | 留，在 `view_detail` |
+| `rights` | 权限：充电、下载、付费、禁转载、合作、互动视频、全景、禁分享 | 留，在 `view_detail` |
+| `argue_info` | 争议提示：文案、类型、链接 | 留，在 `view_detail` |
+| `pages` | 分 P 列表：cid、标题、时长、宽高、首帧、创建时间 | 留，在 `view_detail` |
+| `subtitle` | 字幕 | 留，在 `view_detail` |
+| `label` | 标签 | 留，在 `view_detail` |
+| `ugc_season` | 合集：标题、封面、简介、集数、是否付费、各集 | 留；单条超过 90KB 时裁掉并记入 `view_detail_clipped` |
+| `user_garb` | 装扮 | 留，在 `view_detail` |
+| `honor_reply` | 荣誉，如每周必看 | 留，在 `view_detail` |
+| `like_icon` | 点赞图标 | 留，在 `view_detail` |
 
 #### Scenario: 命中视频的详情含分 P 和投币
 
 - **GIVEN** 一条命中视频的详情同时含有 `stat.coin` 和 `pages`
 - **WHEN** 补抓完成并上传
-- **THEN** `view_detail` 含有投币数
-- **AND** `view_detail` 不含 `pages`
+- **THEN** `view_detail` 含有投币数和 `pages`
 
-### Requirement: 粉丝接口字段
+#### Scenario: 合集分集列表超出单条上限
 
-规则命中后，`/x/relation/stat` SHALL 只上传粉丝数 `follower`。
+- **GIVEN** 详情里的 `ugc_season` 使这条观察超过 90KB
+- **WHEN** 系统裁剪后上传
+- **THEN** `view_detail` 不含 `ugc_season`
+- **AND** `view_detail_clipped` 含有 `ugc_season`
+- **AND** 同条记录里的推荐卡片仍然保留
+
+### Requirement: 关系接口原样上传
+
+规则命中后，`/x/relation/stat` 的 `data` SHALL 原样写入 `relation_stat`，其中包含粉丝数 `follower`。
 
 | 字段 | 含义 | 上传 |
 |---|---|---|
 | `follower` | 粉丝数 | 留 |
-| `mid` | 用户 id | 没留，作者 id 已经有 |
-| `following` | 关注数 | 没留 |
-| `whisper` | 悄悄关注数 | 没留 |
-| `black` | 黑名单数 | 没留 |
-| `fans_medal_toast` / `fans_effect` | 粉丝牌提示、特效 | 没留 |
+| `mid` | 用户 id | 留，在 `relation_stat` |
+| `following` | 关注数 | 留，在 `relation_stat` |
+| `whisper` | 悄悄关注数 | 留，在 `relation_stat` |
+| `black` | 黑名单数 | 留，在 `relation_stat` |
+| `fans_medal_toast` / `fans_effect` | 粉丝牌提示、特效 | 留，在 `relation_stat` |
 
 #### Scenario: 关系接口返回关注数
 
 - **GIVEN** 命中作者的关系接口同时返回 `follower` 和 `following`
 - **WHEN** 结果上传
-- **THEN** 上传含有粉丝数
-- **AND** 上传不含关注数
+- **THEN** `relation_stat` 含有粉丝数和关注数
 
 ### Requirement: 作者投稿字段全部上传
 
@@ -255,7 +262,7 @@
 | `vt` / `enable_vt` / `vt_display` | 播放时长展示 | 留 |
 | `playback_position` / `is_self_view` / `view_self_type` | 播放进度、自见 | 留 |
 
-分页信息 `page.pn`、`page.ps`、`page.count` SHALL 保留总数。`list.tlist`、`episodic_button`、`is_risk`、`gaia_res_type`、`gaia_data` SHALL NOT 写入 `author_archives`。
+分页信息 `page.pn`、`page.ps`、`page.count` SHALL 保留总数。`list.tlist` SHALL 写入 `author_archive_partitions`，`episodic_button` SHALL 写入 `author_episodic_button`。`is_risk`、`gaia_res_type`、`gaia_data` SHALL NOT 上传。
 
 #### Scenario: 稿件带有分区和充电标记
 
