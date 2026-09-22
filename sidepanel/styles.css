@@ -199,6 +199,14 @@ input[type="checkbox"] { width: 1.0625rem; height: 1.0625rem; accent-color: var(
 .category-fields .form-grid { margin-bottom: 0; }
 .category-remove { justify-self: start; min-height: 2.125rem; padding-block: 0.3125rem; background: transparent; font-size: 0.75rem; }
 .add-category { width: 100%; min-height: 2.5rem; margin-top: 0.5rem; border-style: dashed; background: transparent; color: var(--blue); font-size: 0.75rem; }
+.term-editor { display: grid; gap: 0.375rem; }
+.term-editor + .term-editor { margin-top: 0.75rem; }
+.term-editor-label { color: var(--text); font-size: 0.75rem; }
+.term-list { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.term-chip { display: inline-flex; align-items: center; gap: 0.125rem; max-width: 100%; min-height: 1.75rem; padding: 0.125rem 0.125rem 0.125rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; background: var(--input); color: var(--text); font-size: 0.75rem; }
+.term-chip button { min-width: 1.25rem; min-height: 1.25rem; padding: 0; border: 0; border-radius: 999px; background: transparent; box-shadow: none; color: var(--quiet); font-size: 0.875rem; line-height: 1; }
+.term-add { min-width: 1.75rem; min-height: 1.75rem; padding: 0; border-style: dashed; border-radius: 999px; background: transparent; box-shadow: none; color: var(--blue); font-size: 1rem; line-height: 1; }
+input.term-input { width: 8.5rem; min-height: 1.75rem; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
 .save-rules { width: 100%; margin-top: 2px; }
 .notice-disclosure { padding: 0 0.25rem; color: var(--quiet); font-size: 0.75rem; }
 .notice-disclosure summary { min-height: 2.25rem; display: flex; align-items: center; cursor: pointer; }

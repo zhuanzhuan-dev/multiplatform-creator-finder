@@ -23,7 +23,7 @@ export function DouyinTaskPage({extension,now,draft,setDraft,ruleDraft,setRuleDr
         state={state}
         cloud={snapshot.cloud}
         outboxCount={snapshot.outboxCount || 0}
-        schedule={feedOnly?undefined:snapshot.schedule}
+        schedule={snapshot.schedule}
         now={now}
         busyAction={extension.busyAction}
         startDisabled={!draft.dryRun && (!connected || extension.bridgeChecking)}

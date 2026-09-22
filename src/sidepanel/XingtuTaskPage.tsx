@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react';
 import { canResumeRun, elapsedRunMs } from '../../lib/run-limits.js';
 import { formatDuration } from './format';
 import { sendRuntime } from '../shared/chrome-runtime';
+import { ScheduleEditor } from './components';
 import type { useExtensionState } from './use-extension-state';
-import type { SettingsDraft } from './types';
+import { settingsDraft, type SettingsDraft } from './types';
 
 type Props = { extension: ReturnType<typeof useExtensionState>; draft: SettingsDraft; now: number };
 export function XingtuTaskPage({extension, draft, now}: Props) {
@@ -19,6 +20,9 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
   const [minDelay,setMinDelay]=useState('4');
   const [maxDelay,setMaxDelay]=useState('6');
   const [keywords,setKeywords]=useState('');
+  const [scheduleDraft,setScheduleDraft]=useState<SettingsDraft>(() => settingsDraft({ schedule: snapshot.settings?.schedule }));
+  const savedSchedule=JSON.stringify(snapshot.settings?.schedule || null);
+  useEffect(()=>{setScheduleDraft(settingsDraft({ schedule: snapshot.settings?.schedule }));},[savedSchedule]);
   const [saving,setSaving]=useState(false);
   const [notice,setNotice]=useState('');
   const savedLimit=snapshot.settings?.xingtuTarget?.maxPages || 50;
@@ -31,7 +35,7 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
   const save=async()=>{
     setSaving(true);setNotice('');
     try {
-      await sendRuntime({type:'DRA_SAVE_XINGTU_CONFIG',maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),keywords:keywords.split(/[\n,，;；]+/).map(word=>word.trim()).filter(Boolean)});
+      await sendRuntime({type:'DRA_SAVE_XINGTU_CONFIG',maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),keywords:keywords.split(/[\n,，;；]+/).map(word=>word.trim()).filter(Boolean),schedule:{enabled:scheduleDraft.scheduleEnabled,weekdays:scheduleDraft.scheduleWeekdays,times:scheduleDraft.scheduleTimes,target:{mode:scheduleDraft.scheduleTargetMode,durationMinutes:scheduleDraft.scheduleDurationMinutes,maxItems:scheduleDraft.scheduleMaxItems},reuseExistingTab:scheduleDraft.scheduleReuseExistingTab,lateToleranceMinutes:scheduleDraft.scheduleLateToleranceMinutes}});
       await extension.refresh();setNotice('已保存，下轮星图采集生效');
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}finally{setSaving(false);}
   };
@@ -84,6 +88,7 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
         <label className="field">翻页最短等待（秒）<input type="number" min="1" max="30" step="0.1" value={minDelay} disabled={active || saving} onChange={event=>setMinDelay(event.target.value)} required /></label>
         <label className="field">翻页最长等待（秒）<input type="number" min={minDelay || '1'} max="30" step="0.1" value={maxDelay} disabled={active || saving} onChange={event=>setMaxDelay(event.target.value)} required /></label>
         <p className="field-note">每页保存后在区间内随机等待，再翻下一页；另需等待列表加载。达到每批页数后自动暂停，建议休息至少 3 小时，可手动提前继续。到达当前筛选末页时结束本轮。随机等待仍有触发访问限制的风险。</p>
+        <ScheduleEditor draft={scheduleDraft} disabled={active || saving} onChange={setScheduleDraft} platform="xingtu" />
         <label className="field">整账号排除词<textarea rows={6} value={keywords} disabled={active || saving} onChange={event=>setKeywords(event.target.value)} /></label>
         <p className="field-note">每行一个词。达人昵称、抖音号或标签命中时排除整个账号。修改只作用于新一轮星图任务，暂停中的任务继续使用原规则。</p>
         <button type="submit" disabled={active || saving}>{saving?'保存中…':'保存星图设置'}</button><p className="field-note" role="status">{errorMessage(notice)}</p>

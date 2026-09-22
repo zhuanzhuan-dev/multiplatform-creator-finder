@@ -25,7 +25,7 @@ import {
   pairUrlFor,
   shrinkRecordsToByteLimit,
 } from "./lib/cloud.js";
-import { DEFAULT_RULES, DEFAULT_SETTINGS, INITIAL_STATE, STORAGE_KEYS, TEAM_DESTINATION, mergeRules, mergeSettings, mergeXingtuRules, mergeXingtuSettings, validateSettings } from "./lib/defaults.js";
+import { DEFAULT_RULES, DEFAULT_SETTINGS, INITIAL_STATE, STORAGE_KEYS, TEAM_DESTINATION, mergeRules, mergeSettings, mergeXingtuRules, mergeXingtuSettings, scheduleFrom, validateSettings } from "./lib/defaults.js";
 import { migrateDecisionHistory, writeDecisions, cleanupDecisions, decisionPreview, queryDecisions } from "./lib/decision-store.js";
 import { normalizeSourcePlatform } from "./lib/source-platform.js";
 import { makeCreatorKey } from "./lib/normalizers.js";
@@ -37,6 +37,8 @@ import { firstRunnableTabInWindow, launchUrl, resolveRoute } from "./src/core/pl
 
 const WATCHDOG_ALARM = "dra-watchdog";
 const SCHEDULE_ALARM = "dra-schedule-next";
+const BILIBILI_SCHEDULE_ALARM = "dra-schedule-bilibili";
+const BILIBILI_POPULAR_SCHEDULE_ALARM = "dra-schedule-bilibili-popular";
 const RUN_STOP_ALARM = "dra-run-stop";
 const UPLOAD_ALARM = "dra-upload";
 const MAX_SEEN_VIDEOS = 5_000;
@@ -68,6 +70,31 @@ function configurationFor(platform) {
 function taskConfigPlatform(task) {
   if (task?.route?.platform === "bilibili" && task.route?.surface === "popular") return "bilibili-popular";
   return task?.route?.platform || "douyin";
+}
+function bilibiliSettingsFrom(savedConfig, fallback) {
+  const merged = mergeSettings(savedConfig?.settings || fallback);
+  if (savedConfig?.scheduleOptIn !== true) merged.schedule = { ...merged.schedule, enabled: false };
+  return merged;
+}
+const SCHEDULED_PLATFORMS = [
+  { alarm: SCHEDULE_ALARM, platform: "douyin" },
+  { alarm: "dra-schedule-kuaishou", platform: "kuaishou" },
+  { alarm: BILIBILI_SCHEDULE_ALARM, platform: "bilibili" },
+  { alarm: BILIBILI_POPULAR_SCHEDULE_ALARM, platform: "bilibili-popular" },
+  { alarm: "dra-schedule-feigua", platform: "feigua" },
+  { alarm: "dra-schedule-xingtu", platform: "xingtu" }
+];
+function platformSchedule(platform) {
+  if (platform === "feigua") return settings.feiguaSchedule;
+  return configurationFor(platform).settings?.schedule;
+}
+function scheduleRuntime(platform) {
+  if (platform === "kuaishou") return kuaishou;
+  if (platform === "bilibili") return bilibili;
+  if (platform === "bilibili-popular") return bilibiliPopular;
+  if (platform === "feigua") return feigua;
+  if (platform === "xingtu") return xingtu;
+  return null;
 }
 let configQueue = Promise.resolve();
 let seenVideos = [];
@@ -240,26 +267,32 @@ async function initialize() {
     const savedRules = saved[STORAGE_KEYS.rules] || {};
     const savedRulesVersion = Number(savedRules.version || 0);
     settings = mergeSettings(saved[STORAGE_KEYS.settings] || DEFAULT_SETTINGS);
+    settings.feiguaSchedule = scheduleFrom(settings.feiguaSchedule, settings.feiguaScheduleOptIn === true);
     settingsDraft = saved[STORAGE_KEYS.settingsDraft] || null;
     rules = mergeRules(savedRules);
     const previousKuaishou = saved.draKuaishouConfig;
+    const kuaishouSettings = mergeSettings(previousKuaishou?.settings || saved.draKuaishou?.state?.runSettings || settings);
+    kuaishouSettings.schedule = scheduleFrom(kuaishouSettings.schedule, previousKuaishou?.scheduleOptIn === true);
     kuaishouConfig = {
-      settings:mergeSettings(previousKuaishou?.settings || saved.draKuaishou?.state?.runSettings || settings),
+      settings:kuaishouSettings,
       rules:mergeRules(previousKuaishou?.rules || saved.draKuaishou?.state?.runRules || rules),
-      settingsDraft:previousKuaishou?.settingsDraft || null
+      settingsDraft:previousKuaishou?.settingsDraft || null,
+      scheduleOptIn:previousKuaishou?.scheduleOptIn === true
     };
     await chrome.storage.local.set({draKuaishouConfig:kuaishouConfig});
     const previousBilibili = saved.draBilibiliConfig;
     bilibiliConfig = {
-      settings:mergeSettings(previousBilibili?.settings || saved.draBilibili?.state?.runSettings || settings),
+      settings:bilibiliSettingsFrom(previousBilibili, saved.draBilibili?.state?.runSettings || settings),
       rules:mergeBilibiliRules(previousBilibili?.rules || saved.draBilibili?.state?.runRules || {}),
-      settingsDraft:previousBilibili?.settingsDraft || null
+      settingsDraft:previousBilibili?.settingsDraft || null,
+      scheduleOptIn:previousBilibili?.scheduleOptIn === true
     };
     const previousPopular = saved.draBilibiliPopularConfig;
     bilibiliPopularConfig = {
-      settings:mergeSettings(previousPopular?.settings || saved.draBilibiliPopular?.state?.runSettings || bilibiliConfig.settings),
+      settings:bilibiliSettingsFrom(previousPopular, bilibiliConfig.settings),
       rules:mergeBilibiliRules(previousPopular?.rules || saved.draBilibiliPopular?.state?.runRules || bilibiliConfig.rules),
-      settingsDraft:previousPopular?.settingsDraft || null
+      settingsDraft:previousPopular?.settingsDraft || null,
+      scheduleOptIn:previousPopular?.scheduleOptIn === true
     };
     await chrome.storage.local.set({draBilibiliConfig:bilibiliConfig,draBilibiliPopularConfig:bilibiliPopularConfig});
     if (!saved.draBilibili && saved.draBilibiliPopular) await chrome.storage.local.remove("draBilibili");
@@ -271,9 +304,10 @@ async function initialize() {
         xingtuUploadEnabled:settings.xingtuUploadEnabled,
         dryRun:settings.dryRun,
         keepSystemAwake:settings.keepSystemAwake
-      }),
+      }, { scheduleOptIn: previousXingtu?.scheduleOptIn === true }),
       rules:mergeXingtuRules(previousXingtu?.rules || {xingtuKeywords:rules.xingtuKeywords}),
-      settingsDraft:previousXingtu?.settingsDraft || null
+      settingsDraft:previousXingtu?.settingsDraft || null,
+      scheduleOptIn:previousXingtu?.scheduleOptIn === true
     };
     await chrome.storage.local.set({draXingtuConfig:xingtuConfig});
     dailyStats = saved[STORAGE_KEYS.dailyStats] || null;
@@ -947,12 +981,14 @@ async function applyPageRuntimeState(status = {}) {
 }
 
 async function syncScheduleAlarm(fromMs = Date.now()) {
-  await chrome.alarms.clear(SCHEDULE_ALARM);
-  if (settings.schedule?.enabled === false || validateSchedule(settings.schedule).length) return null;
-  const occurrence = nextScheduledOccurrence(settings.schedule, fromMs);
-  if (!occurrence) return null;
-  await chrome.alarms.create(SCHEDULE_ALARM, { when: occurrence.scheduledTime });
-  return occurrence;
+  for (const item of SCHEDULED_PLATFORMS) {
+    await chrome.alarms.clear(item.alarm);
+    const schedule = platformSchedule(item.platform);
+    if (schedule?.enabled === false || validateSchedule(schedule).length) continue;
+    const occurrence = nextScheduledOccurrence(schedule, fromMs);
+    if (!occurrence) continue;
+    await chrome.alarms.create(item.alarm, { when: occurrence.scheduledTime });
+  }
 }
 
 async function syncRunStopAlarm() {
@@ -965,22 +1001,26 @@ async function syncRunStopAlarm() {
   return when;
 }
 
-async function getScheduleStatus() {
-  const alarm = await chrome.alarms.get(SCHEDULE_ALARM).catch(() => null);
-  const fallback = alarm ? null : nextScheduledOccurrence(settings.schedule, Date.now());
+async function getScheduleStatus(platform = "douyin") {
+  const entry = SCHEDULED_PLATFORMS.find((item) => item.platform === platform) || SCHEDULED_PLATFORMS[0];
+  const schedule = platformSchedule(entry.platform) || {};
+  const task = scheduleRuntime(entry.platform);
+  const taskState = task ? task.state() : state;
+  const alarm = await chrome.alarms.get(entry.alarm).catch(() => null);
+  const fallback = alarm ? null : nextScheduledOccurrence(schedule, Date.now());
   return {
-    enabled: settings.schedule?.enabled !== false,
-    weekdays: settings.schedule?.weekdays || [],
-    times: settings.schedule?.times || [],
-    target: normalizeRunTarget(settings.schedule?.target),
-    reuseExistingTab: settings.schedule?.reuseExistingTab !== false,
+    enabled: schedule.enabled !== false,
+    weekdays: schedule.weekdays || [],
+    times: schedule.times || [],
+    target: normalizeRunTarget(schedule.target),
+    reuseExistingTab: schedule.reuseExistingTab !== false,
     nextRunAt: alarm?.scheduledTime
       ? new Date(alarm.scheduledTime).toISOString()
       : fallback?.scheduledTime
         ? new Date(fallback.scheduledTime).toISOString()
         : null,
-    lastRunAt: state.lastScheduleAt,
-    lastResult: state.lastScheduleResult || ""
+    lastRunAt: taskState.lastScheduleAt,
+    lastResult: taskState.lastScheduleResult || ""
   };
 }
 
@@ -1483,14 +1523,14 @@ async function saveConfiguration(message) {
   if (!['douyin','kuaishou','bilibili','bilibili-popular','feigua','xingtu'].includes(platform)) throw new Error('请选择具体平台后修改设置');
   const configPlatform = platform;
   if (configPlatform === 'xingtu') {
-    if (xingtu.active() && message.settings && JSON.stringify(mergeXingtuSettings({...xingtuConfig.settings,dryRun:message.settings.dryRun,keepSystemAwake:message.settings.keepSystemAwake})) !== JSON.stringify(xingtuConfig.settings)) throw new Error('请先暂停当前平台任务再修改设置');
+    if (xingtu.active() && message.settings && JSON.stringify(mergeXingtuSettings({...xingtuConfig.settings,dryRun:message.settings.dryRun,keepSystemAwake:message.settings.keepSystemAwake}, { scheduleOptIn: xingtuConfig.scheduleOptIn === true })) !== JSON.stringify(xingtuConfig.settings)) throw new Error('请先暂停当前平台任务再修改设置');
     const nextSettings = mergeXingtuSettings({
       ...xingtuConfig.settings,
       dryRun: message.settings ? message.settings.dryRun : xingtuConfig.settings.dryRun,
       keepSystemAwake: message.settings ? message.settings.keepSystemAwake !== false : xingtuConfig.settings.keepSystemAwake
-    });
+    }, { scheduleOptIn: xingtuConfig.scheduleOptIn === true });
     const nextRules = mergeXingtuRules(message.rules || xingtuConfig.rules);
-    const next = {settings:nextSettings,rules:nextRules,settingsDraft:null};
+    const next = {settings:nextSettings,rules:nextRules,settingsDraft:null,scheduleOptIn:xingtuConfig.scheduleOptIn === true};
     await chrome.storage.local.set({draXingtuConfig:next});
     xingtuConfig = next;
     return {ok:true,configPlatform,...next,problems:[]};
@@ -1514,14 +1554,20 @@ async function saveConfiguration(message) {
     settings:nextSettings,rules:nextRules,settingsDraft:message.settings ? null : current.settingsDraft
   };
   if (configPlatform === 'kuaishou') {
+    if (!problems.length) next.scheduleOptIn = true;
     await chrome.storage.local.set({draKuaishouConfig:next});
     kuaishouConfig = next;
+    if (!problems.length) await syncScheduleAlarm();
   } else if (configPlatform === 'bilibili') {
+    if (!problems.length) next.scheduleOptIn = true;
     await chrome.storage.local.set({draBilibiliConfig:next});
     bilibiliConfig = next;
+    if (!problems.length) await syncScheduleAlarm();
   } else if (configPlatform === 'bilibili-popular') {
+    if (!problems.length) next.scheduleOptIn = true;
     await chrome.storage.local.set({draBilibiliPopularConfig:next});
     bilibiliPopularConfig = next;
+    if (!problems.length) await syncScheduleAlarm();
   } else {
     const scheduleChanged = JSON.stringify(settings.schedule) !== JSON.stringify(next.settings.schedule);
     await chrome.storage.local.set({[STORAGE_KEYS.settings]:next.settings,[STORAGE_KEYS.rules]:next.rules,[STORAGE_KEYS.settingsDraft]:next.settingsDraft});
@@ -1826,35 +1872,58 @@ async function handleRunStopAlarm() {
 
 async function handleScheduledAlarm(alarm) {
   await initialize();
+  const entry = SCHEDULED_PLATFORMS.find((item) => item.alarm === alarm.name) || SCHEDULED_PLATFORMS[0];
+  const task = scheduleRuntime(entry.platform);
   const scheduledTime = Number(alarm?.scheduledTime || Date.now());
   await syncScheduleAlarm(Math.max(Date.now(), scheduledTime + 1_000));
-  if (settings.schedule?.enabled === false) return;
+  const schedule = platformSchedule(entry.platform);
+  const record = async (result) => {
+    if (task) await task.noteSchedule(result);
+    else {
+      state.lastScheduleAt = new Date().toISOString();
+      state.lastScheduleResult = result;
+      state.lastError = result.startsWith("定时启动失败") ? result : state.lastError;
+      await persistState();
+    }
+  };
+  if (schedule?.enabled === false) return;
 
   const lateMinutes = Math.max(0, Date.now() - scheduledTime) / 60_000;
-  const toleranceMinutes = Math.max(0, Number(settings.schedule?.lateToleranceMinutes || 0));
+  const toleranceMinutes = Math.max(0, Number(schedule?.lateToleranceMinutes || 0));
   if (lateMinutes > toleranceMinutes) {
-    state.lastScheduleAt = new Date().toISOString();
-    state.lastScheduleResult = `错过计划时间 ${Math.round(lateMinutes)} 分钟，已跳过本次`;
-    await persistState();
+    await record(`错过计划时间 ${Math.round(lateMinutes)} 分钟，已跳过本次`);
     return;
   }
-  if (isActiveRunStatus()) {
-    state.lastScheduleAt = new Date().toISOString();
-    state.lastScheduleResult = "到点时已有刷号任务运行，未重复启动";
-    await persistState();
+  if (task ? task.active() : isActiveRunStatus()) {
+    await record("到点时已有刷号任务运行，未重复启动");
     return;
   }
 
   try {
-    await startRun({
-      trigger: "schedule",
-      scheduledFor: new Date(scheduledTime).toISOString()
-    });
+    if (task) {
+      const windowInfo = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null);
+      if (entry.platform === "feigua" || entry.platform === "xingtu") {
+        const tab = await task.openPage({ windowId: windowInfo?.id, focusTab: false });
+        await task.start(tab.id);
+        await task.noteSchedule("已按计划启动");
+      } else {
+        await task.start({
+          trigger: "schedule",
+          target: schedule.target,
+          scheduledFor: new Date(scheduledTime).toISOString(),
+          windowId: windowInfo?.id,
+          focus: false,
+          reuseExisting: schedule.reuseExistingTab !== false
+        });
+      }
+    } else {
+      await startRun({
+        trigger: "schedule",
+        scheduledFor: new Date(scheduledTime).toISOString()
+      });
+    }
   } catch (error) {
-    state.lastScheduleAt = new Date().toISOString();
-    state.lastScheduleResult = `定时启动失败：${error?.message || String(error)}`;
-    state.lastError = state.lastScheduleResult;
-    await persistState();
+    await record(`定时启动失败：${error?.message || String(error)}`);
   }
 }
 
@@ -1890,7 +1959,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
   if (alarm.name === RUN_STOP_ALARM) handleRunStopAlarm().catch((error) => setPaused("到点停止任务失败", error.message));
-  if (alarm.name === SCHEDULE_ALARM) handleScheduledAlarm(alarm).catch((error) => {
+  if (SCHEDULED_PLATFORMS.some((item) => item.alarm === alarm.name)) handleScheduledAlarm(alarm).catch((error) => {
     state.lastScheduleAt = new Date().toISOString();
     state.lastScheduleResult = `定时任务异常：${error?.message || String(error)}`;
     persistState().catch(() => undefined);
@@ -2149,7 +2218,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           teamDestination: TEAM_DESTINATION,
           cloud: cloudStatusSnapshot(),
           daily: dailySnapshot(dailyStats),
-          schedule: await getScheduleStatus(),
+          schedule: await getScheduleStatus(taskConfigPlatform(selectedState)),
           queueLength: uploadableOutbox().length,
           outboxCount: uploadableOutbox().length,
           outbox: outbox.slice(-20).reverse()
@@ -2192,9 +2261,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if(!Number.isInteger(maxPages) || maxPages<1 || maxPages>500) throw Error('页数需为 1 至 500 的整数');
           if(!Number.isFinite(minSeconds) || !Number.isFinite(maxSeconds) || minSeconds<1 || maxSeconds>30 || maxSeconds<minSeconds) throw Error('翻页间隔需为 1 至 30 秒，最大值应大于或等于最小值');
           if(!Array.isArray(message.keywords) || message.keywords.length>200 || message.keywords.some(word=>typeof word!=='string'||word.length>100)) throw Error('规避词格式不正确，最多 200 个词，每个词最多 100 字');
-          settings={...settings,feiguaTarget:{maxPages},feiguaDelay:{minSeconds,maxSeconds}};
+          settings={...settings,feiguaTarget:{maxPages},feiguaDelay:{minSeconds,maxSeconds},...(message.schedule ? {feiguaSchedule:scheduleFrom(message.schedule, true),feiguaScheduleOptIn:true} : {})};
           rules={...rules,feiguaKeywords:[...new Set(message.keywords.map(word=>word.trim()).filter(Boolean))]};
           await chrome.storage.local.set({[STORAGE_KEYS.settings]:settings,[STORAGE_KEYS.rules]:rules});
+          if (message.schedule) await syncScheduleAlarm();
           return {ok:true};
         });
         configQueue=save.catch(()=>undefined);return save;
@@ -2209,11 +2279,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if(!Number.isFinite(minSeconds) || !Number.isFinite(maxSeconds) || minSeconds<1 || maxSeconds>30 || maxSeconds<minSeconds) throw Error('翻页间隔需为 1 至 30 秒，最大值应大于或等于最小值');
           if(!Array.isArray(message.keywords) || message.keywords.length>200 || message.keywords.some(word=>typeof word!=='string'||word.length>100)) throw Error('规避词格式不正确，最多 200 个词，每个词最多 100 字');
           xingtuConfig = {
-            settings:mergeXingtuSettings({...xingtuConfig.settings,xingtuTarget:{maxPages},xingtuDelay:{minSeconds,maxSeconds}}),
+            settings:mergeXingtuSettings({...xingtuConfig.settings,xingtuTarget:{maxPages},xingtuDelay:{minSeconds,maxSeconds},...(message.schedule ? {schedule:message.schedule} : {})}, { scheduleOptIn: message.schedule ? true : xingtuConfig.scheduleOptIn === true }),
             rules:mergeXingtuRules({xingtuKeywords:[...new Set(message.keywords.map(word=>word.trim()).filter(Boolean))]}),
-            settingsDraft:null
+            settingsDraft:null,
+            scheduleOptIn: message.schedule ? true : xingtuConfig.scheduleOptIn === true
           };
           await chrome.storage.local.set({draXingtuConfig:xingtuConfig});
+          if (message.schedule) await syncScheduleAlarm();
           return {ok:true};
         });
         configQueue=save.catch(()=>undefined);return save;

@@ -109,6 +109,7 @@ export interface Settings {
   xingtuTarget?: { maxPages?: number };
   xingtuDelay?: { minSeconds: number; maxSeconds: number };
   bilibiliBatchDelay?: { minSeconds: number; maxSeconds: number };
+  feiguaSchedule?: ScheduleSettings;
   feiguaUploadEnabled?: boolean;
   xingtuUploadEnabled?: boolean;
   engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
@@ -199,7 +200,7 @@ export function settingsDraft(settings: EditableNumbers<Settings> = {}): Setting
     dwellMaxSeconds: settings.dwell?.maxSeconds ?? 30,
     bilibiliBatchMinSeconds: settings.bilibiliBatchDelay?.minSeconds ?? 5,
     bilibiliBatchMaxSeconds: settings.bilibiliBatchDelay?.maxSeconds ?? 12,
-    targetMode: settings.target?.mode ?? "both",
+    targetMode: settings.target?.mode ?? "time",
     targetDurationMinutes: settings.target?.durationMinutes ?? 60,
     targetMaxItems: settings.target?.maxItems ?? 100,
     keepSystemAwake: settings.keepSystemAwake !== false,

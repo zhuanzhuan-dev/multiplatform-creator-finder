@@ -2,7 +2,7 @@ import { errorMessage } from '../shared/error-message';
 import { sourcePlatformLabel } from "../../lib/source-platform.js";
 import { recentHistoryUrl } from "../../lib/cloud.js";
 import { canResumeRun, elapsedRunMs } from "../../lib/run-limits.js";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NumberInput, inputNumber } from "../shared/NumberInput";
 import { decisionMeta, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
 import { RadarDisplay } from "./RadarDisplay";
@@ -221,12 +221,18 @@ interface SettingsPanelProps {
   saveStatus: string;
 }
 
-export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, recommendationPlatform="douyin" }: SettingsPanelProps & {recommendationPlatform?: "douyin" | "kuaishou" | "bilibili"}) {
+const SCHEDULE_COPY: Record<string, { hint: string; reuse: string; showTarget: boolean }> = {
+  douyin: { hint: "到点自动创建或复用抖音任务页", reuse: "优先复用插件创建的抖音任务页", showTarget: true },
+  kuaishou: { hint: "到点自动打开快手推荐页", reuse: "优先复用已打开的快手推荐页", showTarget: true },
+  bilibili: { hint: "到点自动打开这一路 B 站页面", reuse: "优先复用已打开的这一路 B 站页面", showTarget: true },
+  feigua: { hint: "到点按当前每批页数打开飞瓜视频库", reuse: "优先复用已打开的飞瓜视频库", showTarget: false },
+  xingtu: { hint: "到点按当前每批页数打开星图达人广场", reuse: "优先复用已打开的星图达人广场", showTarget: false }
+};
+
+export function ScheduleEditor({ draft, disabled, onChange, platform }: { draft: SettingsDraft; disabled: boolean; onChange(next: SettingsDraft): void; platform: keyof typeof SCHEDULE_COPY }) {
+  const copy = SCHEDULE_COPY[platform];
   const number = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, [key]: inputNumber(event.target.value) });
-  };
-  const checkbox = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    onChange({ ...draft, [key]: event.target.checked });
   };
   const toggleWeekday = (day: number) => {
     const next = draft.scheduleWeekdays.includes(day)
@@ -241,6 +247,8 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
   const removeTime = (index: number) => onChange({ ...draft, scheduleTimes: draft.scheduleTimes.filter((_, position) => position !== index) });
   const applyPreset = () => onChange({
     ...draft,
+    targetMode: "time",
+    targetDurationMinutes: 60,
     scheduleEnabled: true,
     scheduleWeekdays: [2, 3, 4, 5, 6],
     scheduleTimes: ["11:15", "13:30", "16:00", "18:00", "20:00", "23:00"],
@@ -250,6 +258,38 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
     scheduleReuseExistingTab: true,
     scheduleLateToleranceMinutes: 10
   });
+  return (
+    <section className="setting-group" aria-labelledby="scheduleSettingTitle">
+      <div className="setting-heading inline-heading"><span><strong id="scheduleSettingTitle">定时任务</strong><small>{copy.hint}</small></span><input aria-label="启用定时任务" type="checkbox" checked={draft.scheduleEnabled} disabled={disabled} onChange={(event) => onChange({ ...draft, scheduleEnabled: event.target.checked })} /></div>
+      <div className={`schedule-editor ${draft.scheduleEnabled ? "" : "disabled"}`}>
+        <div className="weekday-picker" aria-label="执行星期">
+          {["日", "一", "二", "三", "四", "五", "六"].map((label, day) => <button type="button" key={label} className={draft.scheduleWeekdays.includes(day) ? "selected" : ""} disabled={disabled || !draft.scheduleEnabled} onClick={() => toggleWeekday(day)}>周{label}</button>)}
+        </div>
+        <div className="time-list">
+          {draft.scheduleTimes.map((time, index) => <div className="time-row" key={`${time}-${index}`}><input aria-label={`执行时间 ${index + 1}`} type="time" value={time} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => changeTime(index, event.target.value)} /><button type="button" aria-label={`删除 ${time}`} disabled={disabled || !draft.scheduleEnabled || draft.scheduleTimes.length <= 1} onClick={() => removeTime(index)}>×</button></div>)}
+          <button type="button" className="add-time" disabled={disabled || !draft.scheduleEnabled} onClick={() => onChange({ ...draft, scheduleTimes: [...draft.scheduleTimes, "09:00"] })}>＋ 添加时间</button>
+        </div>
+        <div className="form-grid">
+          {copy.showTarget ? <label>任务目标<select value={draft.scheduleTargetMode} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => onChange({ ...draft, scheduleTargetMode: event.target.value as SettingsDraft["scheduleTargetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label> : null}
+          {copy.showTarget && draft.scheduleTargetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.scheduleDurationMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleDurationMinutes")} /></label> : null}
+          {copy.showTarget && draft.scheduleTargetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.scheduleMaxItems} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleMaxItems")} /></label> : null}
+          <label>允许延迟启动（分钟）<NumberInput aria-describedby="scheduleDelayHelp" min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
+        </div>
+        <p className="field-note" id="scheduleDelayHelp">定时触发晚于计划时，在此时间内仍可启动；超过则跳过本次任务。</p>
+        <label className="check"><input type="checkbox" checked={draft.scheduleReuseExistingTab} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => onChange({ ...draft, scheduleReuseExistingTab: event.target.checked })} />{copy.reuse}</label>
+        <button type="button" className="preset-button" disabled={disabled} onClick={applyPreset}>应用默认预设</button>
+      </div>
+    </section>
+  );
+}
+
+export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, recommendationPlatform="douyin" }: SettingsPanelProps & {recommendationPlatform?: "douyin" | "kuaishou" | "bilibili"}) {
+  const number = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    onChange({ ...draft, [key]: inputNumber(event.target.value) });
+  };
+  const checkbox = (key: keyof SettingsDraft) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    onChange({ ...draft, [key]: event.target.checked });
+  };
   return (
     <div className="settings-disclosure">
       <div className="disclosure-body">
@@ -292,27 +332,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
           </div>
         </section>
 
-        {recommendationPlatform==='douyin' ? <section className="setting-group" aria-labelledby="scheduleSettingTitle">
-          <div className="setting-heading inline-heading"><span><strong id="scheduleSettingTitle">定时任务</strong><small>到点自动创建或复用抖音任务页</small></span><input aria-label="启用定时任务" type="checkbox" checked={draft.scheduleEnabled} disabled={disabled} onChange={checkbox("scheduleEnabled")} /></div>
-          <div className={`schedule-editor ${draft.scheduleEnabled ? "" : "disabled"}`}>
-            <div className="weekday-picker" aria-label="执行星期">
-              {["日", "一", "二", "三", "四", "五", "六"].map((label, day) => <button key={label} className={draft.scheduleWeekdays.includes(day) ? "selected" : ""} disabled={disabled || !draft.scheduleEnabled} onClick={() => toggleWeekday(day)}>周{label}</button>)}
-            </div>
-            <div className="time-list">
-              {draft.scheduleTimes.map((time, index) => <div className="time-row" key={`${time}-${index}`}><input aria-label={`执行时间 ${index + 1}`} type="time" value={time} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => changeTime(index, event.target.value)} /><button aria-label={`删除 ${time}`} disabled={disabled || !draft.scheduleEnabled || draft.scheduleTimes.length <= 1} onClick={() => removeTime(index)}>×</button></div>)}
-              <button className="add-time" disabled={disabled || !draft.scheduleEnabled} onClick={() => onChange({ ...draft, scheduleTimes: [...draft.scheduleTimes, "09:00"] })}>＋ 添加时间</button>
-            </div>
-            <div className="form-grid">
-              <label>任务目标<select value={draft.scheduleTargetMode} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => onChange({ ...draft, scheduleTargetMode: event.target.value as SettingsDraft["scheduleTargetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label>
-              {draft.scheduleTargetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.scheduleDurationMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleDurationMinutes")} /></label> : null}
-              {draft.scheduleTargetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.scheduleMaxItems} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleMaxItems")} /></label> : null}
-              <label>允许延迟启动（分钟）<NumberInput aria-describedby="scheduleDelayHelp" min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
-            </div>
-            <p className="field-note" id="scheduleDelayHelp">定时触发晚于计划时，在此时间内仍可启动；超过则跳过本次任务。</p>
-            <label className="check"><input type="checkbox" checked={draft.scheduleReuseExistingTab} disabled={disabled || !draft.scheduleEnabled} onChange={checkbox("scheduleReuseExistingTab")} />优先复用插件创建的抖音任务页</label>
-            <button className="preset-button" disabled={disabled} onClick={applyPreset}>应用默认预设</button>
-          </div>
-        </section> : null}
+        <ScheduleEditor draft={draft} disabled={disabled} onChange={onChange} platform={recommendationPlatform} />
 
         <div className="form-grid compact-options">
           <label className="check"><input type="checkbox" checked={draft.keepSystemAwake} disabled={disabled} onChange={checkbox("keepSystemAwake")} />运行期间保持系统唤醒</label>
@@ -339,6 +359,40 @@ interface AdvancedRulesPanelProps {
 
 function terms(value: string): string[] {
   return [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function TermChips({ label, values, disabled, onChange }: { label: string; values: string[]; disabled: boolean; onChange(next: string[]): void }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(false);
+  useEffect(() => { if (adding) inputRef.current?.focus(); }, [adding]);
+  const commit = () => {
+    if (cancelRef.current) { cancelRef.current = false; setDraft(""); setAdding(false); return; }
+    const next = terms(draft);
+    setDraft("");
+    setAdding(false);
+    if (next.length) onChange([...new Set([...values, ...next])]);
+  };
+  const cancel = () => { cancelRef.current = true; setDraft(""); setAdding(false); };
+  return (
+    <div className="term-editor">
+      <span className="term-editor-label">{label}</span>
+      <div className="term-list">
+        {values.map((term) => (
+          <span className="term-chip" key={term}>
+            {term}
+            <button type="button" aria-label={`移除${term}`} disabled={disabled} onClick={() => onChange(values.filter((item) => item !== term))}>×</button>
+          </span>
+        ))}
+        {adding ? (
+          <input ref={inputRef} className="term-input" type="text" value={draft} disabled={disabled} placeholder="输入后回车" aria-label={`添加${label}`} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commit(); } if (event.key === "Escape") cancel(); }} onBlur={commit} />
+        ) : (
+          <button type="button" className="term-add" disabled={disabled} aria-label={`添加${label}`} onClick={() => setAdding(true)}>＋</button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engagement, variant="default" }: AdvancedRulesPanelProps & {variant?: "default" | "bilibili"}) {
@@ -390,15 +444,15 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
               <label>最短时长（秒）<NumberInput min="1" value={hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
               <label>准入播放量<NumberInput min="0" value={hard.minPlays ?? 100000} disabled={disabled} onChange={setHard("minPlays")} /></label>
               <label>直接剔除低于<NumberInput min="0" value={hard.rejectPlaysBelow ?? 10000} disabled={disabled} onChange={setHard("rejectPlaysBelow")} /></label>
-              <label>早期窗口（天）<NumberInput min="1" value={hard.earlyPlayWindowDays ?? 3} disabled={disabled} onChange={setHard("earlyPlayWindowDays")} /></label>
+              <label>新视频天数<NumberInput min="1" value={hard.earlyPlayWindowDays ?? 3} disabled={disabled} onChange={setHard("earlyPlayWindowDays")} /></label>
             </div>
-            <p className="field-note">默认：时长≥60秒；发布后窗口内播放≥10万才准入；播放&lt;1万直接剔除。弹幕不作核心条件，评论量仅作参考。</p>
+            <p className="field-note">默认：时长≥60秒；新视频天数内播放≥10万才准入，超过后播放仍不够的同样不留下；播放&lt;1万直接剔除。弹幕不作核心条件，评论量仅作参考。</p>
             <label className="check"><input type="checkbox" checked={draft.includeDigital === true} disabled={disabled} onChange={(event) => onChange({ ...draft, includeDigital: event.target.checked })} />纳入数码类（贴片合作需要时再开）</label>
           </section>
           <section className="setting-group" aria-labelledby="excludeRulesTitle">
             <div className="setting-heading"><strong id="excludeRulesTitle">特殊内容剔除</strong><span>纯动漫/电影等无合作价值内容</span></div>
-            <label>分区名黑名单<textarea rows={2} value={(draft.excludeTnames as string[] || []).join("、")} disabled={disabled} onChange={(event) => onChange({ ...draft, excludeTnames: termsList(event.target.value) })} /></label>
-            <label>标题关键词黑名单<textarea rows={3} value={(draft.contentBlacklist as string[] || []).join("、")} disabled={disabled} onChange={(event) => onChange({ ...draft, contentBlacklist: termsList(event.target.value) })} /></label>
+            <TermChips label="分区名黑名单" values={(draft.excludeTnames as string[]) || []} disabled={disabled} onChange={(excludeTnames) => onChange({ ...draft, excludeTnames })} />
+            <TermChips label="标题关键词黑名单" values={(draft.contentBlacklist as string[]) || []} disabled={disabled} onChange={(contentBlacklist) => onChange({ ...draft, contentBlacklist })} />
           </section>
           <section className="setting-group" aria-labelledby="categoryRulesTitle">
             <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
