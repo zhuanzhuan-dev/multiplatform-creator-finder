@@ -319,7 +319,7 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
             <label>最长（秒）<NumberInput min="1" max="300" value={draft.bilibiliBatchMaxSeconds} disabled={disabled} onChange={number("bilibiliBatchMaxSeconds")} /></label>
           </div>
           <button className="preset-button" disabled={disabled} onClick={() => onChange({ ...draft, bilibiliBatchMinSeconds: 5, bilibiliBatchMaxSeconds: 12 })}>应用默认 5–12 秒</button>
-          <p className="field-note">B 站是接口批采，淘汰的视频不再补抓。规则命中后会再慢速拉取该视频详情和作者最新 30 条投稿，无法保证绝对安全。</p>
+          <p className="field-note">B 站是接口批采，淘汰的视频不再补抓。规则命中后会立刻拉取该视频详情和粉丝数，请求前不再等待。</p>
         </section> : null}
 
         <section className="setting-group" aria-labelledby="targetSettingTitle">

@@ -21,32 +21,31 @@
 
 ### Requirement: 规则淘汰不补抓
 
-直接淘汰的视频 SHALL NOT 请求视频详情、粉丝数或作者投稿。未对上淘汰或理想规则、交给人工的视频 SHALL 仍补抓。
+直接淘汰的视频 SHALL NOT 请求视频详情或粉丝数。未对上淘汰或理想规则、交给人工的视频 SHALL 仍补抓这两项。采集 SHALL NOT 请求作者投稿列表。
 
 #### Scenario: 播放量低于剔除线
 
 - **GIVEN** 推荐或热门返回一条播放量低于直接剔除线的视频
 - **WHEN** 系统完成规则判断
 - **THEN** 上传包含这张列表卡片（`feed_item`）
-- **AND** 不出现 `view_detail`、`relation_stat` 和 `author_archives`
+- **AND** 不出现 `view_detail` 和 `relation_stat`
+- **AND** 不请求作者投稿
 
-### Requirement: 规则命中后慢速补三次
+### Requirement: 规则命中后补两次
 
-视频规则命中后，系统 SHALL 按这个顺序各请求一次，相邻请求之间等待 8–16 秒：
+视频规则命中后，系统 SHALL 按这个顺序各请求一次，请求前 SHALL NOT 等待：
 
 1. `/x/web-interface/wbi/view`：当前视频详情
 2. `/x/relation/stat`：粉丝数
-3. `/x/space/wbi/arc/search`：该作者按发布时间排序的第一页，`pn=1`、`ps=30`
 
-系统 SHALL NOT 翻到投稿第二页。投稿总数可以记录，列表只保留返回的这 30 条。任一补抓失败 SHALL NOT 中止本轮，命中结果仍上传。
+系统 SHALL NOT 请求 `/x/space/wbi/arc/search`。任一补抓失败 SHALL NOT 中止本轮，命中结果仍上传。
 
-#### Scenario: 作者投稿超过 30 条
+#### Scenario: 命中视频不拉作者投稿
 
-- **GIVEN** 一条视频命中规则，且作者投稿总数为 80
+- **GIVEN** 一条视频命中规则
 - **WHEN** 补抓完成
-- **THEN** `author_archives` 只有 30 条
-- **AND** 投稿总数仍为 80
-- **AND** 投稿列表标记为未拉全
+- **THEN** 已请求视频详情和粉丝数
+- **AND** 未请求作者投稿列表
 
 ### Requirement: 登录接口不上传
 
@@ -231,41 +230,22 @@
 - **WHEN** 结果上传
 - **THEN** `relation_stat` 含有粉丝数和关注数
 
-### Requirement: 作者投稿字段全部上传
+### Requirement: 作者投稿补抓已暂停
 
-规则命中后，`/x/space/wbi/arc/search` 第一页每条稿件 SHALL 原字段全部进入 `author_archives`。系统 MAY 另加规范化别名（视频号、封面、时长秒数、播放、评论、弹幕、发布时间、作者 id、是否联合投稿），SHALL NOT 为了上传而删掉原字段。这些字段不需要单独的数据库列；它们写在上传记录的 JSON 里。
+2026-09-23 起采集 SHALL NOT 调用 `/x/space/wbi/arc/search`。命中结果的 `author_archives` 留空，不写投稿总数、分区列表或合集按钮。
 
-实测第一页稿件包含：
+调用留在 `lib/bilibili-api.js` 的 `enrichMatchedBilibili` 块注释中，便于加回。恢复时去掉该注释，并让返回值使用注释里的 `archives`、`archiveCount`、`archivesComplete`、`partitions`、`episodicButton`。暂停前的顺序是粉丝数之后请求第一页 30 条（`pn=1`、`ps=30`、按发布时间）；当时这次请求前另有 8–16 秒等待，与视频详情、粉丝数的等待一并去掉。写入字段：
 
-| 字段 | 含义 | 上传 |
-|---|---|---|
-| `aid` / `bvid` | 稿件 id | 留 |
-| `title` | 标题 | 留 |
-| `pic` | 封面 | 留 |
-| `description` | 简介 | 留 |
-| `length` | 时长，如 `09:12` | 留 |
-| `created` | 发布时间，秒 | 留 |
-| `play` | 播放 | 留 |
-| `comment` | 评论 | 留 |
-| `video_review` | 弹幕 | 留 |
-| `author` / `mid` | 显示作者、mid | 留 |
-| `typeid` | 分区 id | 留 |
-| `copyright` | 版权类型 | 留 |
-| `subtitle` / `review` | 副标题、审核相关 | 留 |
-| `hide_click` / `is_pay` | 隐藏播放、付费 | 留 |
-| `is_union_video` | 是否联合投稿 | 留 |
-| `is_steins_gate` / `is_live_playback` | 互动视频、直播回放 | 留 |
-| `is_lesson_video` / `is_lesson_finished` / `lesson_update_info` | 课堂 | 留 |
-| `jump_url` / `season_id` / `meta` | 跳转和合集 | 留 |
-| `is_avoided` / `attribute` | 规避、属性位 | 留 |
-| `is_charging_arc` / `elec_arc_type` / `elec_arc_badge` | 充电专属 | 留 |
-| `vt` / `enable_vt` / `vt_display` | 播放时长展示 | 留 |
-| `playback_position` / `is_self_view` / `view_self_type` | 播放进度、自见 | 留 |
+- `author_archives`：最新 30 条投稿
+- `authorArchiveCount`：投稿总数
+- `authorArchivesComplete`：这一页是否已经到末尾
+- `authorArchivePartitions`：分区列表 `tlist`
+- `authorEpisodicButton`：合集按钮
 
-分页信息 `page.pn`、`page.ps`、`page.count` SHALL 保留总数。`list.tlist` SHALL 写入 `author_archive_partitions`，`episodic_button` SHALL 写入 `author_episodic_button`。`is_risk`、`gaia_res_type`、`gaia_data` SHALL NOT 上传。
+扩展侧栏的「视频」角标读取本机近 24 小时已采集记录，不读这份投稿列表。
 
-#### Scenario: 稿件带有分区和充电标记
+#### Scenario: 命中作者不拉投稿
 
-- **GIVEN** 投稿条目含有 `typeid` 和 `is_charging_arc`
-- **WHEN** 该作者因规则命中而被补抓
-- **THEN** `author_archives` 里这条稿件仍带有这两个原字段
+- **GIVEN** 一条视频命中规则
+- **WHEN** 补抓完成并上传
+- **THEN** 上传记录没有作者投稿列表

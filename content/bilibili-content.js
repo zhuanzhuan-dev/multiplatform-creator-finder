@@ -83,7 +83,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         if (!observations.length) throw Error("本批推荐未返回可用视频，已暂停");
       }
 
-      // 淘汰的条目连续处理；命中后再慢速补视频详情和作者投稿，批与批之间仍有间隔。
+      // 淘汰的条目连续处理；命中后立刻补视频详情和粉丝数，不等待。批与批之间仍有间隔。
       for (const item of observations) {
         assert();
         if (seen.has(item.videoId)) continue;
@@ -94,13 +94,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         let followers = null;
         let extra = {};
         if (gate.matched || gate.needsReview) {
-          extra = await enrichMatchedBilibili(observation, {
-            settings: message.settings,
-            delay: async (seconds) => {
-              await progress("transition", { freshIdx, popularPage, waitUntil: Date.now() + seconds * 1000 });
-              await sleep(seconds * 1000);
-            }
-          });
+          extra = await enrichMatchedBilibili(observation);
           observation = extra.observation;
           followers = extra.followers;
         }
