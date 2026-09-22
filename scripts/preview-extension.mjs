@@ -73,7 +73,18 @@ const browserMock = `<script>
     outboxCount: 0,
     teamDestination: { name: "研究台 · No Swipe" }
   };
-  snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:"kuaishou",surface:"recommend",label:"快手推荐"},runId:"preview-ks",feedTabId:103}, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}];
+  const bilibiliRules = {
+    ...snapshot.rules,
+    platform: "bilibili",
+    hard: { minVideoDurationSeconds: 60 },
+    playRules: {
+      reject: [{ plays: 10000, playsOp: "<", days: 3, daysOp: ">" }],
+      prefer: [{ plays: 100000, playsOp: ">=", days: 3, daysOp: "<=" }]
+    },
+    contentBlacklist: ["动漫", "电影"],
+    excludeTnames: []
+  };
+  snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:"kuaishou",surface:"recommend",label:"快手推荐"},runId:"preview-ks",feedTabId:103}, {...snapshot.state,route:{platform:"bilibili",surface:"recommend",label:"B站首页推荐"},runId:"preview-bl",feedTabId:104,status:"idle"}, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}];
   snapshot.feigua={pageCount:50,pageNumber:'50',finalized:false,candidates:[{name:'示例美食账号',followers:'12w'},{name:'示例旅行账号',followers:'8.5w'}]};
   const storageListeners = new Set();
   const previewStorageKey = "draPreviewStorage";
@@ -102,7 +113,12 @@ const browserMock = `<script>
     runtime: {
       lastError: null,
       getManifest: () => (${JSON.stringify({ version: extensionManifest.version, version_name: extensionManifest.version_name })}),
-      sendMessage: (message, callback) => queueMicrotask(() => callback(message.type === "DRA_GET_STATUS" ? {...snapshot,state:snapshot.tasks.find(task=>task.route?.platform===message.platform) || snapshot.state} : { ...snapshot, ok: true })),
+      sendMessage: (message, callback) => queueMicrotask(() => {
+        if (message.type !== "DRA_GET_STATUS") return callback({ ...snapshot, ok: true });
+        const state = snapshot.tasks.find(task => task.route?.platform === message.platform) || snapshot.state;
+        const rules = ["bilibili", "bilibili-popular"].includes(message.platform) ? bilibiliRules : snapshot.rules;
+        callback({ ...snapshot, state, rules, configPlatform: state.route?.platform || "douyin" });
+      }),
       onMessage: { addListener() {}, removeListener() {} }
     },
     storage: {

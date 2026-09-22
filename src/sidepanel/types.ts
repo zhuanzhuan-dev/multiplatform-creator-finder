@@ -226,6 +226,9 @@ export interface CategoryRule {
   enabled?: boolean;
 }
 
+const PLAY_OPS = ["<", "<=", ">", ">="] as const;
+type PlayOp = typeof PLAY_OPS[number];
+
 export interface RuleSettings {
   version?: number;
   platform?: string;
@@ -251,6 +254,10 @@ export interface RuleSettings {
   gameBlacklist: string[];
   contentBlacklist?: string[];
   excludeTnames?: string[];
+  playRules?: {
+    reject: { plays: number | ""; days: number | ""; playsOp: PlayOp; daysOp: PlayOp }[];
+    prefer: { plays: number | ""; days: number | ""; playsOp: PlayOp; daysOp: PlayOp }[];
+  };
   feiguaKeywords: string[];
   xingtuKeywords: string[];
   riskGroups?: unknown[];
@@ -280,6 +287,28 @@ const FALLBACK_RULES: RuleSettings = {
   riskGroups: []
 };
 
+function playOp(value: unknown, fallback: PlayOp): PlayOp {
+  return PLAY_OPS.includes(value as PlayOp) ? value as PlayOp : fallback;
+}
+
+function playRulesDraft(source: Record<string, unknown>): NonNullable<RuleSettings["playRules"]> {
+  const raw = source.playRules && typeof source.playRules === "object" ? source.playRules as { reject?: unknown; prefer?: unknown } : null;
+  const rows = (list: unknown, fallback: { plays: number; days: number; playsOp: PlayOp; daysOp: PlayOp }[], playsOp: PlayOp, daysOp: PlayOp) => {
+    if (!Array.isArray(list)) return fallback;
+    return list.map((row) => {
+      const item = row && typeof row === "object" ? row as { plays?: unknown; days?: unknown; playsOp?: unknown; daysOp?: unknown } : {};
+      const numberOrBlank = (value: unknown): number | "" => value === "" || value == null ? "" : Number(value);
+      return { plays: numberOrBlank(item.plays), days: numberOrBlank(item.days), playsOp: playOp(item.playsOp, playsOp), daysOp: playOp(item.daysOp, daysOp) };
+    });
+  };
+  const hard = source.hard && typeof source.hard === "object" ? source.hard as Record<string, unknown> : {};
+  const days = Number(hard.earlyPlayWindowDays ?? 3);
+  return {
+    reject: rows(raw?.reject, [{ plays: Number(hard.rejectPlaysBelow ?? 10000), days, playsOp: "<", daysOp: ">" }], "<", ">"),
+    prefer: rows(raw?.prefer, [{ plays: Number(hard.minPlays ?? 100000), days, playsOp: ">=", daysOp: "<=" }], ">=", "<=")
+  };
+}
+
 export function rulesDraft(value: unknown): RuleSettings {
   const source = value && typeof value === "object" ? value as Partial<RuleSettings> & Record<string, unknown> : {};
   const hard = source.hard && typeof source.hard === "object" ? source.hard as Record<string, unknown> : FALLBACK_RULES.hard;
@@ -305,6 +334,7 @@ export function rulesDraft(value: unknown): RuleSettings {
         earlyPlayWindowDays: Number(hard.earlyPlayWindowDays ?? 3)
       } : {})
     },
+    ...(isBilibili ? { playRules: playRulesDraft(source) } : {}),
     lowFollowerNewAccount: {
       enabled: isBilibili ? lowFollower.enabled === true : lowFollower.enabled !== false,
       maxVideos: Number(lowFollower.maxVideos ?? FALLBACK_RULES.lowFollowerNewAccount.maxVideos),

@@ -361,6 +361,52 @@ function terms(value: string): string[] {
   return [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
 }
 
+const PLAY_OPS = ["<", "<=", ">", ">="] as const;
+type PlayOp = typeof PLAY_OPS[number];
+const PLAY_OP_LABEL: Record<PlayOp, string> = { "<": "<", "<=": "≤", ">": ">", ">=": "≥" };
+
+function CompareSelect({ op, disabled, label, onChange }: { op: PlayOp; disabled: boolean; label: string; onChange(next: PlayOp): void }) {
+  return (
+    <select className="play-rule-op" aria-label={label} value={op} disabled={disabled} onChange={(event) => onChange(event.target.value as PlayOp)}>
+      {PLAY_OPS.map((value) => <option key={value} value={value}>{PLAY_OP_LABEL[value]}</option>)}
+    </select>
+  );
+}
+
+function PlayRuleList({ kind, title, hint, rows, disabled, onChange }: { kind: "reject" | "prefer"; title: string; hint: string; rows: { plays: number | ""; days: number | ""; playsOp: PlayOp; daysOp: PlayOp }[]; disabled: boolean; onChange(next: { plays: number | ""; days: number | ""; playsOp: PlayOp; daysOp: PlayOp }[]): void }) {
+  const setRow = (index: number, patch: Partial<{ plays: number | ""; days: number | ""; playsOp: PlayOp; daysOp: PlayOp }>) => {
+    onChange(rows.map((row, position) => position === index ? { ...row, ...patch } : row));
+  };
+  return (
+    <div className="play-rule-list">
+      <div className="setting-heading"><strong>{title}</strong><span>{hint}</span></div>
+      {rows.map((row, index) => (
+        <div className="play-rule-row" key={`${kind}-${index}`}>
+          <label className="play-rule-field">
+            <span className="play-rule-caption">播放</span>
+            <span className="play-rule-control">
+              <CompareSelect op={row.playsOp} disabled={disabled} label={`${title}第 ${index + 1} 条播放比较符`} onChange={(playsOp) => setRow(index, { playsOp })} />
+              <NumberInput className="play-rule-input" min="0" aria-label={`${title}第 ${index + 1} 条播放量`} value={row.plays} disabled={disabled} onChange={(event) => setRow(index, { plays: inputNumber(event.target.value) })} />
+            </span>
+          </label>
+          <label className="play-rule-field">
+            <span className="play-rule-caption">发布</span>
+            <span className="play-rule-control">
+              <CompareSelect op={row.daysOp} disabled={disabled} label={`${title}第 ${index + 1} 条发布比较符`} onChange={(daysOp) => setRow(index, { daysOp })} />
+              <span className="play-rule-days">
+                <NumberInput className="play-rule-input" min="0" aria-label={`${title}第 ${index + 1} 条发布天数`} value={row.days} disabled={disabled} onChange={(event) => setRow(index, { days: inputNumber(event.target.value) })} />
+                <span>天</span>
+              </span>
+            </span>
+          </label>
+          <button type="button" className="play-rule-remove" aria-label={`删除${title}规则 ${index + 1}`} disabled={disabled} onClick={() => onChange(rows.filter((_, position) => position !== index))}>×</button>
+        </div>
+      ))}
+      <button type="button" className="add-time" disabled={disabled} onClick={() => onChange([...rows, kind === "reject" ? { plays: 10000, playsOp: "<", days: 3, daysOp: ">" } : { plays: 100000, playsOp: ">=", days: 3, daysOp: "<=" }])}>＋ 添加一条</button>
+    </div>
+  );
+}
+
 function TermChips({ label, values, disabled, onChange }: { label: string; values: string[]; disabled: boolean; onChange(next: string[]): void }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
@@ -440,13 +486,12 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
         <div className="disclosure-body rules-form">
           <section className="setting-group" aria-labelledby="hardRulesTitle">
             <div className="setting-heading"><strong id="hardRulesTitle">B站准入门槛</strong><span>以播放量与时长为主，不使用抖音点赞逻辑</span></div>
-            <div className="form-grid">
+            <div className="form-grid one-field">
               <label>最短时长（秒）<NumberInput min="1" value={hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
-              <label>准入播放量<NumberInput min="0" value={hard.minPlays ?? 100000} disabled={disabled} onChange={setHard("minPlays")} /></label>
-              <label>直接剔除低于<NumberInput min="0" value={hard.rejectPlaysBelow ?? 10000} disabled={disabled} onChange={setHard("rejectPlaysBelow")} /></label>
-              <label>新视频天数<NumberInput min="1" value={hard.earlyPlayWindowDays ?? 3} disabled={disabled} onChange={setHard("earlyPlayWindowDays")} /></label>
             </div>
-            <p className="field-note">默认：时长≥60秒；新视频天数内播放≥10万才准入，超过后播放仍不够的同样不留下；播放&lt;1万直接剔除。弹幕不作核心条件，评论量仅作参考。</p>
+            <PlayRuleList kind="reject" title="直接淘汰" hint="对上任意一条就剔除" rows={draft.playRules?.reject || []} disabled={disabled} onChange={(reject) => onChange({ ...draft, playRules: { reject, prefer: draft.playRules?.prefer || [] } })} />
+            <PlayRuleList kind="prefer" title="理想" hint="对上任意一条算命中" rows={draft.playRules?.prefer || []} disabled={disabled} onChange={(prefer) => onChange({ ...draft, playRules: { prefer, reject: draft.playRules?.reject || [] } })} />
+            <p className="field-note">先看直接淘汰，再看理想。都对不上的交人工确认。</p>
             <label className="check"><input type="checkbox" checked={draft.includeDigital === true} disabled={disabled} onChange={(event) => onChange({ ...draft, includeDigital: event.target.checked })} />纳入数码类（贴片合作需要时再开）</label>
           </section>
           <section className="setting-group" aria-labelledby="excludeRulesTitle">

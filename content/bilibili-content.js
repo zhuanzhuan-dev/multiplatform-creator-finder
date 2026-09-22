@@ -89,11 +89,11 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         if (seen.has(item.videoId)) continue;
         const started = Date.now();
         await progress("submit", { freshIdx, popularPage });
-        const matched = evaluateBilibiliVideoRules(item, message.rules).matched;
+        const gate = evaluateBilibiliVideoRules(item, message.rules);
         let observation = item;
         let followers = null;
         let extra = {};
-        if (matched) {
+        if (gate.matched || gate.needsReview) {
           extra = await enrichMatchedBilibili(observation, {
             settings: message.settings,
             delay: async (seconds) => {
