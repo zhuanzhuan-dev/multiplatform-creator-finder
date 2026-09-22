@@ -86,36 +86,49 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         if (!observations.length) throw Error("本批推荐未返回可用视频，已暂停");
       }
 
-      // 时长和播放先用卡片淘汰。其余先取详情再判分区和关键词，通过后再补粉丝数。
+      // 推荐卡片没有分区名，先打视频详情再判断。热门卡片自带分区，时长或播放已淘汰的不再打详情。
       for (const item of observations) {
         assert();
         if (seen.has(item.videoId)) continue;
         const started = Date.now();
         await progress("submit", { freshIdx, popularPage });
         let observation = item;
-        let gate = evaluateBilibiliVideoRules(observation, message.rules);
         let followers = null;
         let extra = {};
-        const rejectedOnCard = gate.matched === false && gate.needsReview !== true;
-        if (!rejectedOnCard) {
+        let gate = null;
+        const loadView = async () => {
+          const view = await fetchBilibiliView(observation.videoId);
+          observation = clipBilibiliObservation(applyBilibiliView(observation, view));
+          extra = { ...extra, view, archives: extra.archives || [], archiveCount: extra.archiveCount ?? null, archivesComplete: extra.archivesComplete === true };
+        };
+        if (!String(observation.tname || "").trim()) {
           try {
-            const view = await fetchBilibiliView(observation.videoId);
-            observation = clipBilibiliObservation(applyBilibiliView(observation, view));
-            extra = { view, archives: [], archiveCount: null, archivesComplete: false };
-            gate = evaluateBilibiliVideoRules(observation, message.rules);
+            await loadView();
           } catch {
             extra = {};
           }
-          if (gate.matched || gate.needsReview) {
+          gate = evaluateBilibiliVideoRules(observation, message.rules);
+        } else {
+          gate = evaluateBilibiliVideoRules(observation, message.rules);
+          const rejectedOnCard = gate.matched === false && gate.needsReview !== true;
+          if (!rejectedOnCard) {
             try {
-              const relationStat = await fetchBilibiliRelationStat(observation.authorId);
-              const count = Number(relationStat?.follower);
-              followers = Number.isFinite(count) ? count : null;
-              observation = { ...observation, relationStat };
-              extra = { ...extra, relationStat, followers };
+              await loadView();
+              gate = evaluateBilibiliVideoRules(observation, message.rules);
             } catch {
-              followers = null;
+              extra = {};
             }
+          }
+        }
+        if (gate.matched || gate.needsReview) {
+          try {
+            const relationStat = await fetchBilibiliRelationStat(observation.authorId);
+            const count = Number(relationStat?.follower);
+            followers = Number.isFinite(count) ? count : null;
+            observation = { ...observation, relationStat };
+            extra = { ...extra, relationStat, followers };
+          } catch {
+            followers = null;
           }
         }
         await progress("submit", { freshIdx, popularPage });

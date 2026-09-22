@@ -26,6 +26,7 @@ export interface Decision {
   code?: string;
   reasons?: string[];
   accountName?: string;
+  tname?: string;
   avatarUrl?: string;
   profileUrl?: string;
   authorId?: string;

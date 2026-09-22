@@ -62,7 +62,7 @@ export function DecisionsPage() {
         <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
           <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
           <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
-          <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><strong>{decision.accountName || '未识别账号'}</strong></span></td>
+          <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><span className="creator-copy"><strong>{decision.accountName || '未识别账号'}</strong>{decision.tname ? <small>{decision.tname}</small> : null}</span></span></td>
           <td data-label="视频" className="video-cell">
             <div className="video-summary">
               <strong>{decision.caption || decision.videoId || '—'}</strong>

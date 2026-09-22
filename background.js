@@ -508,6 +508,7 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
     code: String(decision.code || "UNKNOWN"),
     reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean).slice(0, 4) : [],
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
+    tname: String(observation.tname || "").slice(0, 80),
     avatarUrl: profile?.avatarUrl || observation.avatarUrl || decision.avatarUrl || "",
     profileUrl: profile?.profileUrl || observation.profileUrl || decision.profileUrl || "",
     authorId: String(observation.authorId || profile?.bilibiliMid || profile?.secUid || ""),
