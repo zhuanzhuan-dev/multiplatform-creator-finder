@@ -1,8 +1,11 @@
 import {
+  applyBilibiliView,
   assertBilibiliLoggedIn,
-  enrichMatchedBilibili,
+  clipBilibiliObservation,
   fetchBilibiliPopular,
   fetchBilibiliRecommend,
+  fetchBilibiliRelationStat,
+  fetchBilibiliView,
   mapBilibiliPopularItem,
   mapBilibiliProfile,
   mapBilibiliRecommendItem,
@@ -83,20 +86,37 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         if (!observations.length) throw Error("本批推荐未返回可用视频，已暂停");
       }
 
-      // 淘汰的条目连续处理；命中后立刻补视频详情和粉丝数，不等待。批与批之间仍有间隔。
+      // 时长和播放先用卡片淘汰。其余先取详情再判分区和关键词，通过后再补粉丝数。
       for (const item of observations) {
         assert();
         if (seen.has(item.videoId)) continue;
         const started = Date.now();
         await progress("submit", { freshIdx, popularPage });
-        const gate = evaluateBilibiliVideoRules(item, message.rules);
         let observation = item;
+        let gate = evaluateBilibiliVideoRules(observation, message.rules);
         let followers = null;
         let extra = {};
-        if (gate.matched || gate.needsReview) {
-          extra = await enrichMatchedBilibili(observation);
-          observation = extra.observation;
-          followers = extra.followers;
+        const rejectedOnCard = gate.matched === false && gate.needsReview !== true;
+        if (!rejectedOnCard) {
+          try {
+            const view = await fetchBilibiliView(observation.videoId);
+            observation = clipBilibiliObservation(applyBilibiliView(observation, view));
+            extra = { view, archives: [], archiveCount: null, archivesComplete: false };
+            gate = evaluateBilibiliVideoRules(observation, message.rules);
+          } catch {
+            extra = {};
+          }
+          if (gate.matched || gate.needsReview) {
+            try {
+              const relationStat = await fetchBilibiliRelationStat(observation.authorId);
+              const count = Number(relationStat?.follower);
+              followers = Number.isFinite(count) ? count : null;
+              observation = { ...observation, relationStat };
+              extra = { ...extra, relationStat, followers };
+            } catch {
+              followers = null;
+            }
+          }
         }
         await progress("submit", { freshIdx, popularPage });
         const profile = mapBilibiliProfile(observation, followers, extra);

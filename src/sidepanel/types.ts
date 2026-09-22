@@ -224,6 +224,7 @@ export interface CategoryRule {
   score: number | "";
   audience: string;
   keywords: string[];
+  partitions?: string[];
   enabled?: boolean;
 }
 
@@ -288,6 +289,14 @@ const FALLBACK_RULES: RuleSettings = {
   riskGroups: []
 };
 
+const BILIBILI_DEFAULT_PARTITIONS: Record<string, string[]> = {
+  food: ["美食"],
+  vlog: ["生活"],
+  knowledge: ["知识"],
+  sports: ["运动"],
+  digital: ["数码", "科技"]
+};
+
 function playOp(value: unknown, fallback: PlayOp): PlayOp {
   return PLAY_OPS.includes(value as PlayOp) ? value as PlayOp : fallback;
 }
@@ -348,6 +357,9 @@ export function rulesDraft(value: unknown): RuleSettings {
       score: Number(category.score || 0),
       audience: String(category.audience || ""),
       keywords: Array.isArray(category.keywords) ? category.keywords.map(String) : [],
+      partitions: Array.isArray(category.partitions)
+        ? category.partitions.map(String)
+        : (isBilibili ? (BILIBILI_DEFAULT_PARTITIONS[String(category.id || "")] || []) : undefined),
       enabled: category.enabled !== false
     })) : FALLBACK_RULES.positiveCategories,
     gameBlacklist: Array.isArray(source.gameBlacklist) ? source.gameBlacklist.map(String) : [],

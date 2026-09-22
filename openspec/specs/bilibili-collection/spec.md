@@ -21,7 +21,7 @@
 
 ### Requirement: 规则淘汰不补抓
 
-直接淘汰的视频 SHALL NOT 请求视频详情或粉丝数。未对上淘汰或理想规则、交给人工的视频 SHALL 仍补抓这两项。采集 SHALL NOT 请求作者投稿列表。
+卡片上已经能直接淘汰的视频（时长、播放，或卡片上已有的分区名、关键词）SHALL NOT 请求视频详情或粉丝数。推荐流卡片没有分区名时，先请求详情再判分区和关键词；这次才淘汰的不再请求粉丝数。未对上淘汰或理想规则、交给人工的视频 SHALL 仍补抓详情和粉丝数。采集 SHALL NOT 请求作者投稿列表。
 
 #### Scenario: 播放量低于剔除线
 
@@ -33,9 +33,9 @@
 
 ### Requirement: 规则命中后补两次
 
-视频规则命中后，系统 SHALL 按这个顺序各请求一次，请求前 SHALL NOT 等待：
+时长过短或播放规则已直接淘汰的视频 SHALL NOT 请求详情或粉丝数。其余视频 SHALL 先请求 `/x/web-interface/wbi/view`，用返回的分区名重新判定分区和关键词，请求前 SHALL NOT 等待。仍命中或待确认时，再请求 `/x/relation/stat` 取粉丝数，请求前同样 SHALL NOT 等待。
 
-1. `/x/web-interface/wbi/view`：当前视频详情
+1. `/x/web-interface/wbi/view`：当前视频详情，供分区名和详情字段
 2. `/x/relation/stat`：粉丝数
 
 系统 SHALL NOT 请求 `/x/space/wbi/arc/search`。任一补抓失败 SHALL NOT 中止本轮，命中结果仍上传。

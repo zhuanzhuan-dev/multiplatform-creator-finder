@@ -469,12 +469,11 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
         score: 10,
         audience: "待填写",
         keywords: [],
+        partitions: [],
         enabled: true
       }]
     });
   };
-  const termsList = (value: string) => [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
-
   if (variant === "bilibili") {
     const hard = draft.hard as RuleSettings["hard"] & {
       minPlays?: number | "";
@@ -495,19 +494,21 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
             <label className="check"><input type="checkbox" checked={draft.includeDigital === true} disabled={disabled} onChange={(event) => onChange({ ...draft, includeDigital: event.target.checked })} />纳入数码类（贴片合作需要时再开）</label>
           </section>
           <section className="setting-group" aria-labelledby="excludeRulesTitle">
-            <div className="setting-heading"><strong id="excludeRulesTitle">特殊内容剔除</strong><span>纯动漫/电影等无合作价值内容</span></div>
+            <div className="setting-heading"><strong id="excludeRulesTitle">特殊内容剔除</strong><span>分区名和关键词分开，两者是「或」</span></div>
             <TermChips label="分区名黑名单" values={(draft.excludeTnames as string[]) || []} disabled={disabled} onChange={(excludeTnames) => onChange({ ...draft, excludeTnames })} />
-            <TermChips label="标题关键词黑名单" values={(draft.contentBlacklist as string[]) || []} disabled={disabled} onChange={(contentBlacklist) => onChange({ ...draft, contentBlacklist })} />
+            <TermChips label="关键词黑名单" values={(draft.contentBlacklist as string[]) || []} disabled={disabled} onChange={(contentBlacklist) => onChange({ ...draft, contentBlacklist })} />
+            <p className="field-note">对上任意一个分区名，或对上任意一个关键词，即淘汰。分区名只比分区名。关键词只比标题、作者名和推荐理由，不比分区名。</p>
           </section>
           <section className="setting-group" aria-labelledby="categoryRulesTitle">
             <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
+            <p className="field-note">每个类目里，分区名和关键词是「或」：对上任意一个分区名，或对上任意一个关键词，即算这个类目。这不代替理想规则的命中。</p>
             {engagement}
             <div className="category-list">
               {draft.positiveCategories.map((category, index) => (
                 <details className="category-editor" key={category.id}>
                   <summary>
                     <span className={`category-dot ${category.enabled === false ? "off" : ""}`} aria-hidden="true" />
-                    <span><strong>{category.name}</strong><small>{category.keywords.length} 个关键词 · +{category.score} 分</small></span>
+                    <span><strong>{category.name}</strong><small>{(category.partitions || []).length} 个分区 · {category.keywords.length} 个关键词 · +{category.score} 分</small></span>
                   </summary>
                   <div className="category-fields">
                     <label className="check"><input type="checkbox" checked={category.enabled !== false} disabled={disabled} onChange={(event) => updateCategory(index, { enabled: event.target.checked })} />启用这个类目</label>
@@ -515,7 +516,8 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
                       <label>类目名称<input type="text" value={category.name} disabled={disabled} onChange={(event) => updateCategory(index, { name: event.target.value })} /></label>
                       <label>命中加分<NumberInput min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: inputNumber(event.target.value) })} /></label>
                     </div>
-                    <label>关键词<textarea rows={3} value={category.keywords.join("、")} disabled={disabled} onChange={(event) => updateCategory(index, { keywords: termsList(event.target.value) })} /></label>
+                    <TermChips label="分区名" values={category.partitions || []} disabled={disabled} onChange={(partitions) => updateCategory(index, { partitions })} />
+                    <TermChips label="关键词" values={category.keywords} disabled={disabled} onChange={(keywords) => updateCategory(index, { keywords })} />
                     <button className="danger-text compact category-remove" disabled={disabled || draft.positiveCategories.length <= 1} onClick={() => removeCategory(index)}>删除这个类目</button>
                   </div>
                 </details>
