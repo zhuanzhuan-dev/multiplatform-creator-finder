@@ -1,4 +1,5 @@
 import { installFeiguaBrowsing } from './feigua-browse.js';
+import { cancelFeiguaIdentities, installFeiguaApiCache, requestFeiguaIdentities } from './feigua-api-cache.js';
 import { collectCurrentPage, pageFingerprint, pagination, pageProblem, revealList } from './feigua-page.js';
 
 import { FEIGUA_IMAGE_GRACE_MS, FEIGUA_PAGE_WAIT_MS, FEIGUA_ROW_STABLE_MS, feiguaDelayMs } from '../lib/feigua-policy.js';
@@ -24,11 +25,12 @@ async function wait(run, milliseconds = 750) {
 }
 async function readStablePage(run, previous = null) {
   const deadline = Date.now() + FEIGUA_PAGE_WAIT_MS;
+  let identityStarted = 0;
   const pageUrl = location.href;
   let stable = '';
   let stableSince = 0;
   let lastPage = null;
-  while (active(run) && Date.now() < deadline) {
+  while (active(run) && (Date.now() < deadline || identityStarted && Date.now() - identityStarted < 120_000)) {
     if (location.href !== pageUrl) throw new Error('飞瓜页面已切换，请检查当前页面后继续');
     const problem = pageProblem();
     if (problem && problem !== 'loading') throw new Error(problem);
@@ -48,13 +50,22 @@ async function readStablePage(run, previous = null) {
       }
       const rowsSettled = Date.now() - stableSince >= FEIGUA_ROW_STABLE_MS;
       const imagesReady = !pendingImages || Date.now() - stableSince >= FEIGUA_IMAGE_GRACE_MS;
-      if (rowsSettled && imagesReady) return page;
+      if (rowsSettled && imagesReady) {
+        const identity = requestFeiguaIdentities(page.rows);
+        if (identity.phase === 'blocked') throw Error(identity.error || '飞瓜身份补数已暂停');
+        if (identity.phase === 'done') {
+          page.rows = collectCurrentPage().rows;
+          return page;
+        }
+        identityStarted ||= Date.now();
+      }
     } else {
       stable = '';
       stableSince = 0;
     }
     await wait(run);
   }
+  if (identityStarted) throw Error('飞瓜身份补数等待超过 120 秒，采集已暂停');
   const error = new Error('等待 30 秒后列表仍未更新或稳定，尝试翻下一页；本次未计为采集成功');
   error.code = 'FEIGUA_PAGE_TIMEOUT';
   error.page = lastPage;
@@ -117,6 +128,7 @@ async function loop(run) {
     }
   } catch (error) {
     if (active(run)) {
+      if (typeof window !== 'undefined') cancelFeiguaIdentities();
       await chrome.runtime.sendMessage({ type: 'DRA_PAGE_BLOCKED', runId: run.runId, loopId: run.loopId, reason: error.message || String(error) }).catch(() => undefined);
       run.canceled = true;
     }
@@ -126,7 +138,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message?.type === 'DRA_LOOP_STATUS') {
     reply({ ok: true, running: Boolean(current && active(current)), runId: current?.runId, loopId: current?.loopId, url: location.href, visibilityState: document.visibilityState, hasFocus: document.hasFocus() });
   } else if (message?.type === 'DRA_STOP_LOOP') {
-    if (current && (!message.loopId || message.loopId === current.loopId)) current.canceled = true;
+    if (current && (!message.loopId || message.loopId === current.loopId)) { current.canceled = true; if (typeof window !== 'undefined') cancelFeiguaIdentities(); }
     reply({ ok: true });
   } else if (message?.type === 'DRA_START_LOOP') {
     if (current?.loopId === message.loopId && active(current)) { reply({ ok: true }); return false; }
@@ -138,6 +150,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   return false;
 });
 
+if (typeof window !== 'undefined') installFeiguaApiCache();
 if (typeof MutationObserver !== 'undefined' && document.body) installFeiguaBrowsing({
   isRunning:()=>Boolean(current && active(current)),
   cancelAutomatic:()=>{if(current)current.canceled=true;}

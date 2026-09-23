@@ -13,6 +13,10 @@ function extensionRuntime(): Plugin {
     "manifest.json",
     "workbench-bridge.js",
     "page/page-bridge.js",
+    "page/feigua-page-bridge.js",
+    "content/feigua-api-cache.js",
+    "lib/feigua-api.js",
+    "lib/feigua-request.js",
     "content/douyin-content.js",
     "content/feigua-content.js",
     "content/kuaishou-content.js",
@@ -81,6 +85,15 @@ function extensionRuntime(): Plugin {
         esbuild({
           entryPoints: [resolve(root, "page/page-bridge.js")],
           outfile: resolve(outputDirectory, "page/page-bridge.js"),
+          bundle: true,
+          format: "iife",
+          platform: "browser",
+          target: "chrome120",
+          legalComments: "none"
+        }),
+        esbuild({
+          entryPoints: [resolve(root, "page/feigua-page-bridge.js")],
+          outfile: resolve(outputDirectory, "page/feigua-page-bridge.js"),
           bundle: true,
           format: "iife",
           platform: "browser",

@@ -1,4 +1,6 @@
 import * as core from "../lib/feigua-parser.js";
+import { canonicalFeiguaPageUrl } from '../lib/feigua-api.js';
+import { enrichFeiguaRow } from './feigua-api-cache.js';
   const FOLLOWER_PATTERN = /粉丝数\s*[：:]?/i;
 
   function ownText(element) {
@@ -193,11 +195,12 @@ import * as core from "../lib/feigua-parser.js";
     parsed.columns.forEach(({label, value}) => {
       if (label && !['视频内容','达人'].includes(label)) parsed.metrics[label] = value;
     });
-    parsed.videoUrl = row.querySelector('.video-cover-link[href]')?.href || '';
-    parsed.videoDetailUrl = row.querySelector('.video-title a[href]')?.href || '';
+    const videoUrl = row.querySelector('.video-cover-link[href]')?.href || '';
+    parsed.videoUrl = /^https:\/\/(?:www\.)?douyin\.com\//.test(videoUrl) ? videoUrl : canonicalFeiguaPageUrl(videoUrl);
+    parsed.videoDetailUrl = canonicalFeiguaPageUrl(row.querySelector('.video-title a[href]')?.href);
     parsed.hotWords = Array.from(row.querySelectorAll('.video-info .el-tag')).map(e => e.textContent.trim()).filter(Boolean);
     parsed.searchText = [parsed.title, parsed.topics.join(' '), parsed.hotWords.join(' '), parsed.authorName].join(' ');
-    return parsed.authorName ? parsed : null;
+    return parsed.authorName ? enrichFeiguaRow(parsed) : null;
   }
 
   function collectCurrentPage() {
@@ -208,7 +211,7 @@ import * as core from "../lib/feigua-parser.js";
     const parsed = rows.map(extractRow).filter(Boolean);
 
     return {
-      pageUrl: location.href,
+      pageUrl: canonicalFeiguaPageUrl(location.href),
       pageNumber: pagination()?.number || "",
       pageTitle: document.title,
       capturedAt: new Date().toISOString(),
@@ -378,5 +381,5 @@ export function collectDetailPage(surface) {
   row.metrics['发布时间']=rawText.match(/发布时间[：:]\s*([^\n]+)/)?.[1] || '';
   const duration=rawText.match(/视频时长[：:]\s*(?:(\d+)分)?(?:(\d+)秒)?/);
   row.durationSeconds=duration && (duration[1] || duration[2])?Number(duration[1] || 0)*60+Number(duration[2] || 0):null;
-  return {pageUrl:location.href,pageTitle:document.title,surface,capturedAt:new Date().toISOString(),pendingImages:pendingImage(avatar)+(cover?pendingImage(cover):0),rows:[row]};
+  return {pageUrl:canonicalFeiguaPageUrl(location.href),pageTitle:document.title,surface,capturedAt:new Date().toISOString(),pendingImages:pendingImage(avatar)+(cover?pendingImage(cover):0),rows:[enrichFeiguaRow(row)]};
 }

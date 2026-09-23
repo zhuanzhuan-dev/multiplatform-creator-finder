@@ -1,8 +1,9 @@
 import { collectCurrentPage, collectDetailPage, browsingSurface, pageAccessProblem } from './feigua-page.js';
 import { FEIGUA_IMAGE_GRACE_MS } from '../lib/feigua-policy.js';
+import { cancelFeiguaIdentities, requestFeiguaIdentities } from './feigua-api-cache.js';
 // Passive collection never clicks or changes the page. Mutation bursts settle twice.
 export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
-  let timer=null, stopped=false, last='', stable='', sending=false, waitingSince=null, imageWaitStarted=null;
+  let timer=null, stopped=false, last='', stable='', sending=false, waitingSince=null, imageWaitStarted=null, identityWaitStarted=null;
   const status=value=>{if(document.documentElement)document.documentElement.dataset.draFeiguaBrowse=value;};
   status('ready');
   const send=message=>chrome.runtime.sendMessage(message);
@@ -32,6 +33,17 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
         if(Date.now()-imageWaitStarted<FEIGUA_IMAGE_GRACE_MS){status('waiting-image-urls');schedule();return;}
       } else imageWaitStarted=null;
       if(!page?.rows?.length || page.diagnostics && page.diagnostics.candidateCount!==page.diagnostics.parsedCount){waitForData('waiting-rows');return;}
+      if(surface==='library'){
+        const identity=requestFeiguaIdentities(page.rows);
+        if(identity.phase==='blocked')throw Error(identity.error || '飞瓜身份补数已暂停');
+        if(identity.phase!=='done'){
+          identityWaitStarted ??= Date.now();
+          if(Date.now()-identityWaitStarted>=120000)throw Error('飞瓜身份补数等待超过 120 秒，采集已暂停');
+          status(`waiting-identity:${identity.pending}`);schedule();return;
+        }
+        identityWaitStarted=null;
+        page.rows=collectCurrentPage().rows;
+      }
       waitingSince=null;
       page.surface=surface;
       const signature=JSON.stringify([surface,location.hash,page.pageNumber,page.rows]);
@@ -49,7 +61,8 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
   document.addEventListener('load',schedule,true);
   document.addEventListener('error',schedule,true);
   document.addEventListener('visibilitychange',schedule);
-  window.addEventListener('hashchange',()=>{last='';stable='';waitingSince=null;imageWaitStarted=null;schedule();});
+  document.addEventListener('dra-feigua-api-update',schedule);
+  window.addEventListener('hashchange',()=>{last='';stable='';waitingSince=null;imageWaitStarted=null;identityWaitStarted=null;schedule();});
   // Script-generated pagination is untrusted and never treated as user takeover.
   const takeover=event=>{
     if(!event.isTrusted || !isRunning())return;
@@ -57,6 +70,7 @@ export function installFeiguaBrowsing({isRunning,cancelAutomatic}) {
     if(!target || target.closest('#dra-floating-launcher'))return;
     if(event.type==='click' && !target.closest('a,button,input,select,[role="tab"],.el-pager,.el-checkbox,.el-radio,.el-tag,.sort-title,.order,.el-select,li'))return;
     cancelAutomatic();
+    cancelFeiguaIdentities();
     void send({type:'DRA_FEIGUA_TAKEOVER',reason:'你已接管飞瓜页面，自动翻页已暂停'}).catch(()=>{});
     schedule();
   };
