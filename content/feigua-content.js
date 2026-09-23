@@ -2,7 +2,7 @@ import { installFeiguaBrowsing } from './feigua-browse.js';
 import { cancelFeiguaIdentities, installFeiguaApiCache, requestFeiguaIdentities } from './feigua-api-cache.js';
 import { collectCurrentPage, pageFingerprint, pagination, pageProblem, revealList } from './feigua-page.js';
 
-import { FEIGUA_IMAGE_GRACE_MS, FEIGUA_PAGE_WAIT_MS, FEIGUA_ROW_STABLE_MS, feiguaDelayMs } from '../lib/feigua-policy.js';
+import { FEIGUA_IMAGE_GRACE_MS, FEIGUA_PAGE_WAIT_MS, FEIGUA_ROW_STABLE_MS, feiguaDelayMs, feiguaNextPageWaitMs } from '../lib/feigua-policy.js';
 
 function pageStabilityKey(page, pager) {
   return JSON.stringify([
@@ -55,7 +55,7 @@ async function readStablePage(run, previous = null) {
         if (identity.phase === 'blocked') throw Error(identity.error || '飞瓜身份补数已暂停');
         if (identity.phase === 'done') {
           page.rows = collectCurrentPage().rows;
-          return page;
+          return { page, lastDetailRequestFinishedAt: identity.lastRequestFinishedAt || 0 };
         }
         identityStarted ||= Date.now();
       }
@@ -76,10 +76,14 @@ async function loop(run) {
     let previous = null;
     while (active(run)) {
       await send(run, 'DRA_PROGRESS', { phase: 'read' });
+      const pageStartedAt = Date.now();
       let page = null;
       let timedOut = false;
+      let lastDetailRequestFinishedAt = 0;
       try {
-        page = await readStablePage(run, previous);
+        const result = await readStablePage(run, previous);
+        page = result.page;
+        lastDetailRequestFinishedAt = result.lastDetailRequestFinishedAt;
       } catch (error) {
         if (error.code !== 'FEIGUA_PAGE_TIMEOUT') throw error;
         timedOut = true;
@@ -104,7 +108,8 @@ async function loop(run) {
         return;
       }
       await send(run, 'DRA_PROGRESS', { phase: 'transition' });
-      await wait(run, feiguaDelayMs(run.settings));
+      const remaining = feiguaNextPageWaitMs({pageStartedAt,lastDetailRequestFinishedAt,now:Date.now(),delayMs:feiguaDelayMs(run.settings)});
+      if (remaining > 0) await wait(run, remaining);
       const problem = pageProblem();
       if (problem && problem !== 'loading') throw new Error(problem);
       const nextPager = pagination();

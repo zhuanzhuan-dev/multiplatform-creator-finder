@@ -76,10 +76,10 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
           <div className="setting-heading"><strong>采集节奏</strong><span>每批自动暂停</span></div>
           <div className="form-grid three-fields">
             <label>每批页数<input type="number" min="1" max="500" step="1" value={limit} disabled={active || saving} onChange={event=>setLimit(event.target.value)} required /></label>
-            <label>最短等待（秒）<input type="number" min="1" max="30" step="0.1" value={minDelay} disabled={active || saving} onChange={event=>setMinDelay(event.target.value)} required /></label>
-            <label>最长等待（秒）<input type="number" min={minDelay || '1'} max="30" step="0.1" value={maxDelay} disabled={active || saving} onChange={event=>setMaxDelay(event.target.value)} required /></label>
+            <label>最短翻页间隔（秒）<input type="number" min="1" max="30" step="0.1" value={minDelay} disabled={active || saving} onChange={event=>setMinDelay(event.target.value)} required /></label>
+            <label>最长翻页间隔（秒）<input type="number" min={minDelay || '1'} max="30" step="0.1" value={maxDelay} disabled={active || saving} onChange={event=>setMaxDelay(event.target.value)} required /></label>
           </div>
-          <p className="field-note">翻页前随机等待；每批结束建议休息 3 小时。</p>
+          <p className="field-note">从进入本页起计算间隔；身份请求结束后至少再隔 1 秒翻页。每批结束建议休息 3 小时。</p>
         </section>
         <section className="setting-group">
           <label className="check"><input type="checkbox" checked={snapshot.browsing?.enabled!==false} onChange={event=>{void sendRuntime({type:'DRA_SET_FEIGUA_BROWSING',enabled:event.target.checked}).then(()=>extension.refresh()).catch(error=>setNotice(String(error)));}} />随浏览保存飞瓜数据</label>
