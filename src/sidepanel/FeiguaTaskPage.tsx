@@ -4,7 +4,7 @@ import { canResumeRun, elapsedRunMs } from '../../lib/run-limits.js';
 import { formatDuration } from './format';
 import { sendRuntime } from '../shared/chrome-runtime';
 import { ConfigurationPanel } from './ConfigurationPanel';
-import { ScheduleEditor } from './components';
+import { ScheduleEditor, TermChips } from './components';
 import type { useExtensionState } from './use-extension-state';
 import { settingsDraft, type Settings, type SettingsDraft } from './types';
 
@@ -19,8 +19,8 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
   const [limit,setLimit]=useState('50');
   const [minDelay,setMinDelay]=useState('4');
   const [maxDelay,setMaxDelay]=useState('6');
-  const [keywords,setKeywords]=useState('');
-  const [positiveKeywords,setPositiveKeywords]=useState('');
+  const [keywords,setKeywords]=useState<string[]>([]);
+  const [positiveKeywords,setPositiveKeywords]=useState<string[]>([]);
   const savedFeiguaSchedule=snapshot.settings?.feiguaSchedule as Settings["schedule"];
   const [scheduleDraft,setScheduleDraft]=useState<SettingsDraft>(() => settingsDraft({ schedule: savedFeiguaSchedule }));
   const savedSchedule=JSON.stringify(savedFeiguaSchedule || null);
@@ -33,13 +33,13 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
   useEffect(()=>{setMinDelay(String(savedMin));setMaxDelay(String(savedMax));},[savedMin,savedMax]);
   const savedKeywords=JSON.stringify((snapshot.rules as {feiguaKeywords?:string[]})?.feiguaKeywords || []);
   const savedPositive=JSON.stringify((snapshot.rules as {feiguaPositiveKeywords?:string[]})?.feiguaPositiveKeywords || []);
-  useEffect(()=>{setPositiveKeywords((JSON.parse(savedPositive) as string[]).join('\n'));},[savedPositive]);
+  useEffect(()=>{setPositiveKeywords(JSON.parse(savedPositive) as string[]);},[savedPositive]);
   useEffect(()=>{setLimit(String(savedLimit));},[savedLimit]);
-  useEffect(()=>{setKeywords((JSON.parse(savedKeywords) as string[]).join('\n'));},[savedKeywords]);
+  useEffect(()=>{setKeywords(JSON.parse(savedKeywords) as string[]);},[savedKeywords]);
   const save=async()=>{
     setSaving(true);setNotice('');
     try {
-      await sendRuntime({type:'DRA_SAVE_FEIGUA_CONFIG',maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),positiveKeywords:positiveKeywords.split(/[\n,，;；]+/).map(word=>word.trim()).filter(Boolean),keywords:keywords.split(/[\n,，;；]+/).map(word=>word.trim()).filter(Boolean),schedule:{enabled:scheduleDraft.scheduleEnabled,weekdays:scheduleDraft.scheduleWeekdays,times:scheduleDraft.scheduleTimes,target:{mode:scheduleDraft.scheduleTargetMode,durationMinutes:scheduleDraft.scheduleDurationMinutes,maxItems:scheduleDraft.scheduleMaxItems},reuseExistingTab:scheduleDraft.scheduleReuseExistingTab,lateToleranceMinutes:scheduleDraft.scheduleLateToleranceMinutes}});
+      await sendRuntime({type:'DRA_SAVE_FEIGUA_CONFIG',maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),positiveKeywords,keywords,schedule:{enabled:scheduleDraft.scheduleEnabled,weekdays:scheduleDraft.scheduleWeekdays,times:scheduleDraft.scheduleTimes,target:{mode:scheduleDraft.scheduleTargetMode,durationMinutes:scheduleDraft.scheduleDurationMinutes,maxItems:scheduleDraft.scheduleMaxItems},reuseExistingTab:scheduleDraft.scheduleReuseExistingTab,lateToleranceMinutes:scheduleDraft.scheduleLateToleranceMinutes}});
       await extension.refresh();setNotice('已保存：浏览采集立即生效，自动翻页从新一轮生效');
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}finally{setSaving(false);}
   };
@@ -94,13 +94,13 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
       <form className="disclosure-body rules-form" onSubmit={event=>{event.preventDefault();void save();}}>
         <section className="setting-group">
           <div className="setting-heading"><strong>想找的内容</strong><span>命中正向词 → 规则命中</span></div>
-          <label className="field">正向关键词<textarea rows={3} value={positiveKeywords} disabled={active || saving} onChange={event=>setPositiveKeywords(event.target.value)} placeholder="例如：美食、摄影、数码" /></label>
+          <TermChips label="正向关键词" values={positiveKeywords} disabled={active || saving} onChange={setPositiveKeywords} />
         </section>
         <section className="setting-group">
           <div className="setting-heading"><strong>要剔除的内容</strong><span>负向优先 → 淘汰账号</span></div>
-          <label className="field">负向排除词<textarea rows={3} value={keywords} disabled={active || saving} onChange={event=>setKeywords(event.target.value)} placeholder="填写需要排除的内容或昵称关键词" /></label>
+          <TermChips label="负向排除词" values={keywords} disabled={active || saving} onChange={setKeywords} />
         </section>
-        <p className="field-note">匹配标题、热词、话题和昵称；换行、逗号或分号分隔。其余待人工确认。</p>
+        <p className="field-note">点击＋添加词条，输入后按回车确认；匹配标题、热词、话题和昵称。其余待人工确认。</p>
         <p className="field-note">保存后浏览采集生效；自动翻页从新一轮生效。</p>
         <button type="submit" disabled={active || saving}>{saving?'保存中…':'保存飞瓜设置'}</button>
         {notice ? <p className="field-note" role="status">{errorMessage(notice)}</p> : null}

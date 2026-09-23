@@ -358,7 +358,7 @@ interface AdvancedRulesPanelProps {
 }
 
 function terms(value: string): string[] {
-  return [...new Set(value.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean))];
+  return [...new Set(value.split(/[，,、;；\n]/).map((item) => item.trim()).filter(Boolean))];
 }
 
 const PLAY_OPS = ["<", "<=", ">", ">="] as const;
@@ -407,7 +407,7 @@ function PlayRuleList({ kind, title, hint, rows, disabled, onChange }: { kind: "
   );
 }
 
-function TermChips({ label, values, disabled, onChange }: { label: string; values: string[]; disabled: boolean; onChange(next: string[]): void }) {
+export function TermChips({ label, values, disabled, onChange }: { label: string; values: string[]; disabled: boolean; onChange(next: string[]): void }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
