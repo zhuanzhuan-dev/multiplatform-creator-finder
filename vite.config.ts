@@ -17,6 +17,7 @@ function extensionRuntime(): Plugin {
     "content/feigua-api-cache.js",
     "lib/feigua-api.js",
     "lib/feigua-request.js",
+    "page/xingtu-page-bridge.js",
     "content/douyin-content.js",
     "content/feigua-content.js",
     "content/kuaishou-content.js",
@@ -25,6 +26,8 @@ function extensionRuntime(): Plugin {
     "content/bilibili-content.js",
     "content/xingtu-content.js",
     "content/xingtu-page.js",
+    "content/xingtu-api-cache.js",
+    "lib/xingtu-api.js",
     "lib/xingtu-parser.js",
     "lib/xingtu-collection.js",
     "lib/xingtu-task.js",
@@ -94,6 +97,15 @@ function extensionRuntime(): Plugin {
         esbuild({
           entryPoints: [resolve(root, "page/feigua-page-bridge.js")],
           outfile: resolve(outputDirectory, "page/feigua-page-bridge.js"),
+          bundle: true,
+          format: "iife",
+          platform: "browser",
+          target: "chrome120",
+          legalComments: "none"
+        }),
+        esbuild({
+          entryPoints: [resolve(root, "page/xingtu-page-bridge.js")],
+          outfile: resolve(outputDirectory, "page/xingtu-page-bridge.js"),
           bundle: true,
           format: "iife",
           platform: "browser",

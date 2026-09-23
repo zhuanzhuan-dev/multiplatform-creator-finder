@@ -92,6 +92,12 @@ button.compact { min-height: 2.75rem; }
 .decision-toggle:hover { border-color: var(--line-soft); background: var(--button-hover); }
 .decision-entry + .decision-entry { border-top: 1px solid var(--line-soft); }
 .decision-entry .decision-row { border-top: 0; }
+.decision-list-note { margin: 0; padding: .625rem .875rem; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: .75rem; line-height: 1.5; }
+.xingtu-candidate-details { padding: 0 .875rem .625rem 3.75rem; color: var(--text); font-size: .75rem; overflow-wrap: anywhere; }
+.xingtu-candidate-details summary { width: fit-content; min-height: 2rem; display: flex; align-items: center; color: var(--blue); cursor: pointer; }
+.xingtu-candidate-details summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.xingtu-candidate-details .field-note { margin: .375rem 0; }
+.xingtu-candidate-details .feigua-video-metrics { margin: .625rem 0; }
 .decision-entry:has(.account-video-details.open) { background: color-mix(in srgb, var(--info-bg) 55%, transparent); }
 .account-video-details { display: inline-grid; gap: 0.5rem; vertical-align: middle; }
 .account-video-details.open { flex: 1 1 100%; width: 100%; }

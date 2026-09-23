@@ -2,11 +2,12 @@ import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './li
 import { createBilibiliRuntime, splitLegacyBilibiliStorage, BILIBILI_ALARM, BILIBILI_STOP_ALARM, BILIBILI_POPULAR_ALARM, BILIBILI_POPULAR_STOP_ALARM } from './lib/bilibili-task.js';
 import { bilibiliFeedbackFields } from './lib/bilibili-api.js';
 import { mergeBilibiliRules, validateBilibiliRules } from './lib/bilibili-rules.js';
-import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, normalizeXingtuObservation, observationRecord as feiguaObservationRecord, xingtuObservationRecord, observationStatus, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
+import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, normalizeXingtuObservation, observationRecord as feiguaObservationRecord, xingtuObservationRecord, observationStatus, xingtuObservedCreators, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
 import { evaluateFeiguaRules } from './lib/feigua-rules.js';
 import { rowAccountKey } from './lib/feigua-parser.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { createXingtuRuntime, XINGTU_ALARM, XINGTU_STOP_ALARM } from "./lib/xingtu-task.js";
+import { canonicalXingtuPageUrl } from './lib/xingtu-parser.js';
 import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
 import { rawSamples } from "./lib/raw-sample-store.js";
 import { sanitizeRaw } from "./lib/raw-sample.js";
@@ -497,21 +498,23 @@ function increment(name, amount = 1) {
 
 function recordDecision(decision = {}, observation = {}, profile = null, owner = state) {
   const num = (value) => {
+    if (value == null || typeof value === 'string' && !value.trim()) return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
   };
+  const sourcePlatform = normalizeSourcePlatform(owner.route?.platform || observation.sourcePlatform || observation.platform || "douyin");
   const entry = {
     id: crypto.randomUUID(),
     runId: owner.runId || "",
     runStartedAt: owner.startedAt || "",
-    sourcePlatform: normalizeSourcePlatform(owner.route?.platform || observation.sourcePlatform || observation.platform || "douyin"),
+    sourcePlatform,
     code: String(decision.code || "UNKNOWN"),
     reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean).slice(0, 4) : [],
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
     tname: String(observation.tname || "").slice(0, 80),
     avatarUrl: profile?.avatarUrl || observation.avatarUrl || decision.avatarUrl || "",
     profileUrl: profile?.profileUrl || observation.profileUrl || decision.profileUrl || "",
-    authorId: String(observation.authorId || profile?.bilibiliMid || profile?.secUid || ""),
+    authorId: String(observation.authorId || (sourcePlatform === 'xingtu' ? observation.xingtuId || observation.raw?.xingtuId : '') || profile?.bilibiliMid || profile?.secUid || ""),
     videoId: String(observation.videoId || ""),
     caption: String(observation.caption || observation.title || ""),
     coverUrl: String(observation.coverUrl || ""),
@@ -528,6 +531,11 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
   owner.lastDecision = entry;
   pendingDecisions.push(entry);
   return entry;
+}
+
+async function withXingtuCreatorDetails(items) {
+  const creators=await xingtuObservedCreators(items);
+  return items.map(item=>creators[item.id]?{...item,xingtuCreator:creators[item.id]}:item);
 }
 
 function addOutbox(status, payload, error = "", { transitionPending = false, owner = state } = {}) {
@@ -2190,7 +2198,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_QUERY_HISTORY":
         requireExtensionPage(sender);
         await flushDecisionHistory();
-        return {ok:true,...await queryDecisions(message.options || {})};
+        { const result=await queryDecisions(message.options || {});return {ok:true,...result,items:await withXingtuCreatorDetails(result.items)}; }
       case "DRA_GET_STATUS": {
         await flushDecisionHistory();
         const selectedState = await selectedTask(message.tabId, message.platform);
@@ -2209,11 +2217,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             pageCount:xingtu.collection()?.pages?.length || 0,
             pageNumber:xingtu.state().lastPageNumber || '',
             finalized:xingtu.collection()?.finalized === true,
-            candidates:Object.values(xingtu.collection()?.accounts || {}).slice(0,10).map(row=>({name:row.authorName,followers:row.followerCount || '',avatarUrl:row.avatarUrl || '',profileUrl:row.profileUrl || '',xingtuId:row.xingtuId || '',xingtuIndex:row.xingtuIndex || '',tags:row.tags || [],prices:row.prices || {},metrics:row.metrics || {},city:row.city || '',gender:row.gender || ''}))
+            historyDetailsReady:true,
+            candidates:Object.values(xingtu.collection()?.accounts || {}).slice(-10).reverse().map(row=>({name:row.authorName,followers:row.followerCount || '',avatarUrl:row.avatarUrl || '',profileUrl:row.profileUrl || '',xingtuId:row.xingtuId || '',xingtuIndex:row.xingtuIndex || '',tags:row.tags || [],prices:row.prices || {},metrics:row.metrics || {},city:row.city || '',gender:row.gender || '',observedAt:row.observedAt || ''}))
           },
           pageRoute:Number.isInteger(message.tabId)?resolveRoute((await chrome.tabs.get(message.tabId).catch(()=>null))?.url || ''):null,
           browsing:selectedState.route?.platform==='xingtu' ? {...xingtuBrowseState,...await observationStatus('xingtu')} : {...browseState,...await observationStatus('feigua')},
-          decisionHistory: history.items,
+          decisionHistory: await withXingtuCreatorDetails(history.items),
           decisionHistoryTotal: history.total,
           configPlatform:taskConfigPlatform(selectedState),
           ...configurationFor(taskConfigPlatform(selectedState)),
@@ -2460,7 +2469,7 @@ async function captureXingtuBrowsePage(page,sender) {
   if(!xingtuBrowseState.enabled || xingtu.active() && sender.tab.id===xingtu.state().feedTabId)return {ok:true,skipped:true};
   const tab=await chrome.tabs.get(sender.tab.id);
   if(!tab.active)return {ok:true,skipped:true};
-  if(!page || page.pageUrl!==tab.url || !['market','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>40 || !page.rows.length || JSON.stringify(page).length>500000)throw Error('星图浏览数据不完整或页面已变化');
+  if(!page || page.pageUrl!==canonicalXingtuPageUrl(tab.url) || !['market','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>40 || !page.rows.length || page.rows.some(row=>!/^\d{1,30}$/.test(String(row.xingtuId || ''))) || JSON.stringify(page).length>500000)throw Error('星图浏览数据缺少稳定身份或页面已变化');
   const day=new Date().toISOString().slice(0,10);
   const runId=`xingtu-browse:${day}`;
   try {

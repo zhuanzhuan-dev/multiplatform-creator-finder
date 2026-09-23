@@ -1,5 +1,6 @@
 import { errorMessage } from '../shared/error-message';
 import { sourcePlatformLabel } from "../../lib/source-platform.js";
+import { extractXingtuId } from "../../lib/xingtu-parser.js";
 import { recentHistoryUrl } from "../../lib/cloud.js";
 import { canResumeRun, elapsedRunMs } from "../../lib/run-limits.js";
 import { useEffect, useRef, useState } from "react";
@@ -104,19 +105,34 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
   );
 }
 
-export function RecentDecisions({ now, history = [], total = 0 }: { now: number; history?: Decision[]; total?: number }) {
-  const decisions = history;
-  const visibleDecisions = decisions.slice(0, COLLAPSED_DECISION_COUNT);
+type XingtuCandidate = NonNullable<Snapshot["xingtu"]>["candidates"][number];
+
+export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates, xingtuCandidateTotal = 0, xingtuFinalized = false, xingtuHistoryDetailsReady = false }: { now: number; history?: Decision[]; total?: number; xingtuCandidates?: XingtuCandidate[]; xingtuCandidateTotal?: number; xingtuFinalized?: boolean; xingtuHistoryDetailsReady?: boolean }) {
+  const candidates = (xingtuCandidates || []).filter(row => /^\d{1,30}$/.test(row.xingtuId || ''));
+  const candidateIds = new Set(candidates.map(row => row.xingtuId));
+  const visibleDecisions = history.filter(decision => decision.sourcePlatform !== 'xingtu' || !candidateIds.has(decision.authorId || extractXingtuId(decision.profileUrl))).slice(0, COLLAPSED_DECISION_COUNT);
+  const entries = [
+    ...candidates.map(row => ({ key: `xingtu:${row.xingtuId}`, at: Date.parse(row.observedAt || '') || 0, candidate: row, decision: undefined as Decision | undefined })),
+    ...visibleDecisions.map((decision, index) => ({ key: decision.id || `${decision.occurredAt || 'decision'}-${index}`, at: Date.parse(decision.occurredAt || '') || 0, candidate: undefined as XingtuCandidate | undefined, decision })),
+  ].sort((left, right) => right.at - left.at);
   const openLocalHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
   const openWorkbenchHistory = () => chrome.tabs.create({ url: recentHistoryUrl() });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
-      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">近 24 小时 · 最近 {visibleDecisions.length} 条</span></div>
+      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">{xingtuCandidates ? `本轮候选 ${xingtuCandidateTotal} · 历史近 24 小时` : `近 24 小时 · 最近 ${visibleDecisions.length} 条`}</span></div>
+      {xingtuCandidates && candidates.length ? <p className="decision-list-note">最近 {candidates.length} 个本轮候选与处理记录按时间显示；后续命中规避词的账号会从候选中移除。</p> : null}
       <div className="decision-list" id="recentDecisionList">
-        {decisions.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : visibleDecisions.map((decision, index) => {
+        {entries.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : null}
+        {entries.map(entry => {
+          if (entry.candidate) return <XingtuCandidateEntry key={entry.key} row={entry.candidate} now={now} label={xingtuFinalized?'本轮已保存':'本轮候选'} />;
+          const decision = entry.decision!;
+          if (decision.code === 'XINGTU_OBSERVED' && decision.xingtuCreator) return <XingtuCandidateEntry key={entry.key} row={{
+            name:decision.accountName || '未识别账号',avatarUrl:decision.avatarUrl,profileUrl:decision.profileUrl,
+            xingtuId:decision.authorId,observedAt:decision.occurredAt,...decision.xingtuCreator
+          }} now={now} label="浏览已采集" />;
           const meta = decisionMeta(decision.code);
           return (
-            <article className="decision-entry" key={`${decision.occurredAt || "decision"}-${index}`}>
+            <article className="decision-entry" key={entry.key}>
               <div className="decision-row">
                 {decision.avatarUrl ? <DecisionAvatar url={decision.avatarUrl} name={decision.accountName} /> : null}
                 <div className="decision-copy">
@@ -125,7 +141,7 @@ export function RecentDecisions({ now, history = [], total = 0 }: { now: number;
                     <span className={`decision-label ${meta.tone}`}>{meta.label}</span>
                     <AccountVideosControl decision={decision} now={now} />
                   </div>
-                  <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.reasons?.length ? decision.reasons.map(errorMessage).join(" · ") : decision.code || "已完成判断"}</div>
+                  <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.code === 'XINGTU_OBSERVED' ? xingtuHistoryDetailsReady ? '本地观察中没有对应达人指标' : '扩展后台待重新加载，达人指标暂未显示' : decision.reasons?.length ? decision.reasons.map(errorMessage).join(" · ") : decision.code || "已完成判断"}</div>
                 </div>
                 <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>
               </div>
@@ -143,6 +159,27 @@ export function RecentDecisions({ now, history = [], total = 0 }: { now: number;
       </div>
     </section>
   );
+}
+
+function XingtuCandidateEntry({ row, now, label }: { row: XingtuCandidate; now: number; label: string }) {
+  const metricLabels = row.metrics && Object.values(row.metrics).some(Boolean) ? ['预期CPM','预期播放量','互动率','完播率','爆文率'] : ['1-20s','21-60s','60s+'];
+  return <article className="decision-entry xingtu-candidate-entry">
+    <div className="decision-row">
+      {row.avatarUrl ? <DecisionAvatar url={row.avatarUrl} name={row.name} /> : null}
+      <div className="decision-copy">
+        <div className="decision-main"><span className="decision-name">{row.name}</span><span className="decision-label review">{label}</span></div>
+        <div className="decision-reason">{[row.followers && `粉丝 ${row.followers}`, row.metrics?.['预期CPM'] && `预期CPM ${row.metrics['预期CPM']}`].filter(Boolean).join(' · ') || '星图未提供粉丝量和预期CPM'}</div>
+      </div>
+      {row.observedAt ? <time className="decision-time" dateTime={row.observedAt}>{formatRelativeTime(row.observedAt, now)}</time> : null}
+    </div>
+    <details className="xingtu-candidate-details">
+      <summary>查看标签与指标</summary>
+      <p className="field-note">{[row.city, row.gender, `星图 ${row.xingtuId}`].filter(Boolean).join(' · ')}</p>
+      {row.tags?.length ? <p className="field-note">标签：{row.tags.join('、')}</p> : null}
+      <dl className="feigua-video-metrics">{metricLabels.map(label => <div key={label}><dt>{label}</dt><dd>{row.metrics?.[label] || row.prices?.[label] || '未读取'}</dd></div>)}</dl>
+      {row.xingtuIndex ? <p className="field-note">星图指数：{row.xingtuIndex}</p> : null}
+    </details>
+  </article>;
 }
 
 function DecisionAvatar({ url, name }: { url: string; name?: string }) {

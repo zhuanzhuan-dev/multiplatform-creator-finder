@@ -41,6 +41,7 @@ export interface Decision {
   comments?: number | null;
   danmaku?: number | null;
   shares?: number | null;
+  xingtuCreator?: {followers:string;xingtuIndex:string;tags:string[];prices:Record<string,string>;metrics:Record<string,string>;city:string;gender:string};
   occurredAt?: string;
 }
 
@@ -143,7 +144,7 @@ export interface Snapshot {
   pageRoute?: {platform:string;surface:string;label:string}|null;
   browsing?: {enabled:boolean;count:number;lastCapturedAt?:string;lastPageUrl?:string;lastError?:string};
   feigua?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;videos?:{videoId?:string;title?:string;coverUrl?:string;videoUrl?:string;durationSeconds?:number|null;metrics?:Record<string,string>;hotWords?:string[];observedAt?:string}[]}[]};
-  xingtu?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;xingtuId?:string;xingtuIndex?:string;tags?:string[];prices?:Record<string,string>;metrics?:Record<string,string>;city?:string;gender?:string}[]};
+  xingtu?: {pageCount:number;pageNumber:string;finalized:boolean;historyDetailsReady?:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;xingtuId?:string;xingtuIndex?:string;tags?:string[];prices?:Record<string,string>;metrics?:Record<string,string>;city?:string;gender?:string;observedAt?:string}[]};
   tasks?: RunState[];
   decisionHistory?: Decision[];
   decisionHistoryTotal?: number;

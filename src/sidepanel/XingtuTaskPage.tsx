@@ -36,11 +36,12 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
     setSaving(true);setNotice('');
     try {
       await sendRuntime({type:'DRA_SAVE_XINGTU_CONFIG',maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),keywords:keywords.split(/[\n,，;；]+/).map(word=>word.trim()).filter(Boolean),schedule:{enabled:scheduleDraft.scheduleEnabled,weekdays:scheduleDraft.scheduleWeekdays,times:scheduleDraft.scheduleTimes,target:{mode:scheduleDraft.scheduleTargetMode,durationMinutes:scheduleDraft.scheduleDurationMinutes,maxItems:scheduleDraft.scheduleMaxItems},reuseExistingTab:scheduleDraft.scheduleReuseExistingTab,lateToleranceMinutes:scheduleDraft.scheduleLateToleranceMinutes}});
-      await extension.refresh();setNotice('已保存，下轮星图采集生效');
+      await extension.refresh();setNotice('已保存：页数从下一批生效，翻页间隔与规避词从新一轮生效');
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}finally{setSaving(false);}
   };
   const phase:Record<string,string>={read:'读取当前页',submit:'保存本页候选',transition:'翻到下一页',idle:'准备采集下一页'};
   const statusLabel:Record<string,string>={running:'采集中',starting:'正在打开达人广场',paused:'已暂停',stopped:'本轮已结束'};
+  const currentBatchLimit=state.runTarget?.maxPages || savedLimit;
   const busy=Boolean(extension.busyAction);
   return <>
     <section className="feigua-task-card"><h2>浏览自动采集</h2>
@@ -53,7 +54,8 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
     <section className="feigua-task-card" aria-labelledby="xingtuTaskTitle">
       <div className="feigua-task-heading"><h2 id="xingtuTaskTitle">星图达人广场采集</h2><span className="badge">{localOnly?'仅本地保存':'汇总后上传'}</span></div>
       <p className="field-note">使用已登录星图账号当前可见的达人广场筛选结果，逐页提取达人；命中规避词时排除整个账号。</p>
-      <div className="feigua-progress" aria-live="polite"><strong>{Math.max(0,(details?.pageCount || 0)-(state.batchStartPages || 0))}<small> / {state.runTarget?.maxPages || savedLimit} 页（本批）</small></strong><span>{statusLabel[state.status || ''] || '准备开始'}</span></div>
+      <div className="feigua-progress" aria-live="polite"><strong>{Math.max(0,(details?.pageCount || 0)-(state.batchStartPages || 0))}<small> / {currentBatchLimit} 页（本批）</small></strong><span>{statusLabel[state.status || ''] || '准备开始'}</span></div>
+      {state.runId && savedLimit !== currentBatchLimit && state.status !== 'stopped' ? <p className="field-note">本批沿用启动时的 {currentBatchLimit} 页目标；下一批按已保存的 {savedLimit} 页采集。</p> : null}
       <dl className="feigua-metrics">
         <div><dt>已采集页</dt><dd>{details?.pageCount || 0}</dd></div>
         <div><dt>候选账号</dt><dd>{state.stats?.matched || 0}</dd></div>
@@ -71,16 +73,6 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
       <p className="field-note">继续时自动恢复采集页，保留计数和账号去重记录；已采集的页面会跳过重复内容。重新打开网页后，请核对星图筛选条件。{localOnly?'本轮结果只保存在本机，星图历史待上传记录也暂停发送。':'结束后汇总到共用上传队列。'}</p>
     </section>
     {extension.notice.text ? <p className={`message ${extension.notice.error?'error':''}`} role="status">{extension.notice.text}</p> : null}
-    <section className="feigua-task-card" aria-labelledby="xingtuCandidatesTitle">
-      <h2 id="xingtuCandidatesTitle">{details?.finalized?'本轮已保存账号':'本轮候选账号'}</h2>
-      <p className="field-note">显示前 10 个候选；后续页面命中规避词时会移除整个账号。</p>
-      {details?.candidates?.length ? <ul className="feigua-candidates">{details.candidates.map((row,index)=><li key={row.profileUrl || `${row.name}-${index}`}>
-        <div className="feigua-account-heading">{row.avatarUrl ? <img className="feigua-avatar" src={row.avatarUrl} alt={`${row.name}头像`} loading="lazy" referrerPolicy="no-referrer" onError={event=>{event.currentTarget.style.display='none';}} /> : <span className="feigua-avatar" aria-hidden="true">{row.name.slice(0,1)}</span>}<div><strong>{row.name}</strong><p className="field-note">{[row.followers && `${row.followers} 粉丝`, row.city, row.gender, row.xingtuId && `星图 ${row.xingtuId}`].filter(Boolean).join(' · ') || '广场列表未提供粉丝量'}</p></div></div>
-        {row.tags?.length ? <p className="field-note">标签：{row.tags.join('、')}</p> : null}
-        <dl className="feigua-video-metrics">{(row.metrics && Object.values(row.metrics).some(Boolean) ? ['预期CPM','预期播放量','互动率','完播率','爆文率'] : ['1-20s','21-60s','60s+']).map(label=><div key={label}><dt>{label}</dt><dd>{row.metrics?.[label] || row.prices?.[label] || '未读取'}</dd></div>)}</dl>
-        {row.xingtuIndex ? <p className="field-note">星图指数：{row.xingtuIndex}</p> : null}
-      </li>)}</ul> : <p className="field-note">采集到符合条件的账号后会显示在这里。</p>}
-    </section>
     <details className="disclosure feigua-config">
       <summary><strong>星图采集设置</strong><span className="summary-copy">每批页数、翻页间隔与规避词</span></summary>
       <form onSubmit={event=>{event.preventDefault();void save();}}>

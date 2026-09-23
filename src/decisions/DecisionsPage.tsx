@@ -47,7 +47,7 @@ export function DecisionsPage() {
   const counts=data?.counts || {good:0,review:0,reject:0};
   const visible=data?.items || [];
   return <main>
-    <header className="page-header"><div><p className="eyebrow">DISCOVERY / HISTORY</p><h1>近 24 小时记录</h1><p className="subtitle">从当前时间往前推 24 小时，跨轮次保留；每页 50 条，到期自动清理。点「视频」可查看该账号采集到的播放/时长/点赞/收藏等。</p></div><span className="run-status">本机历史</span></header>
+    <header className="page-header"><div><p className="eyebrow">DISCOVERY / HISTORY</p><h1>近 24 小时记录</h1><p className="subtitle">从当前时间往前推 24 小时，跨轮次保留；每页 50 条，到期自动清理。视频来源可点「视频」查看播放、时长和互动数据；星图显示达人资料。</p></div><span className="run-status">本机历史</span></header>
     <section className="decision-rail" aria-label="处理结果汇总">
       {[['','全部记录',counts.good+counts.review+counts.reject],['good','符合条件',counts.good],['review','需人工确认',counts.review],['reject','淘汰与跳过',counts.reject]].map(([tone,label,count])=><button key={tone} className={`${tone} ${filters.tone===tone?'selected':''}`} onClick={()=>change({tone:String(tone)})}><span>{label}</span><strong>{count}</strong></button>)}
     </section>
@@ -58,17 +58,22 @@ export function DecisionsPage() {
         <label><span className="visually-hidden">搜索账号或原因</span><input type="search" value={filters.query} placeholder="搜索账号、结果或原因" onChange={e=>change({query:e.target.value})} /></label>
       </div>
       {error?<p className="empty-state" role="alert">{errorMessage(error)}<button onClick={()=>setRevision(r=>r+1)}>重试</button></p>:!data?<p className="empty-state">正在读取记录…</p>:visible.length===0?<p className="empty-state">近 24 小时内没有符合条件的记录。</p>:<div className="table-scroll"><table>
-        <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>视频</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
+        <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>采集内容</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
         <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
           <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
           <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
           <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><span className="creator-copy"><strong>{decision.accountName || '未识别账号'}</strong>{decision.tname ? <small>{decision.tname}</small> : null}</span></span></td>
-          <td data-label="视频" className="video-cell">
-            <div className="video-summary">
-              <strong>{decision.caption || decision.videoId || '—'}</strong>
-              <span>{decisionMetricLine(decision)}</span>
-            </div>
-            <AccountVideosControl decision={decision} now={now} />
+          <td data-label="采集内容" className="video-cell">
+            {decision.sourcePlatform === 'xingtu' ? <div className="video-summary"><strong>达人资料</strong>{decision.authorId ? <span>星图 ID：{decision.authorId}</span> : null}{decision.xingtuCreator ? <>
+              <span>{[decision.xingtuCreator.followers && `粉丝 ${decision.xingtuCreator.followers}`,decision.xingtuCreator.metrics?.['预期CPM'] && `预期CPM ${decision.xingtuCreator.metrics['预期CPM']}`].filter(Boolean).join(' · ') || '星图未提供粉丝量和预期CPM'}</span>
+              {decision.xingtuCreator.tags.length ? <span>标签：{decision.xingtuCreator.tags.join('、')}</span> : null}
+            </> : decision.code === 'XINGTU_OBSERVED' ? <span>达人指标暂未显示</span> : null}</div> : <>
+              <div className="video-summary">
+                <strong>{decision.caption || decision.videoId || '—'}</strong>
+                <span>{decisionMetricLine(decision)}</span>
+              </div>
+              <AccountVideosControl decision={decision} now={now} />
+            </>}
           </td>
           <td data-label="处理结果"><span className={`decision-badge ${meta.tone}`}>{meta.label}</span></td>
           <td data-label="处理依据" className="reason">{decision.reasons?.map(errorMessage).join(' · ') || decision.code}</td>

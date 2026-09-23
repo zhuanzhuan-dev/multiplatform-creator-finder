@@ -12,7 +12,7 @@ export function AccountVideosControl({ decision, now = Date.now() }: { decision:
   const [error, setError] = useState("");
   const [items, setItems] = useState<Decision[] | null>(null);
   const [count, setCount] = useState<number | null>(null);
-  const canInspect = Boolean(decision.authorId || decision.profileUrl || decision.videoId);
+  const canInspect = decision.sourcePlatform !== "xingtu" && Boolean(decision.authorId || decision.profileUrl || decision.videoId);
   if (!canInspect) return null;
 
   const toggle = async () => {
