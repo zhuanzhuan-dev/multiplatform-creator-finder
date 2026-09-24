@@ -44,6 +44,8 @@ const BILIBILI_SCHEDULE_ALARM = "dra-schedule-bilibili";
 const BILIBILI_POPULAR_SCHEDULE_ALARM = "dra-schedule-bilibili-popular";
 const RUN_STOP_ALARM = "dra-run-stop";
 const UPLOAD_ALARM = "dra-upload";
+const CREATOR_UPLOAD_BACKFILL_ALARM = "dra-creator-upload-backfill";
+const CREATOR_UPLOAD_BACKFILL_KEY = "draCreatorUploadBackfillV1";
 const MAX_SEEN_VIDEOS = 5_000;
 const MAX_OUTBOX = 1_000;
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -112,6 +114,7 @@ let dailyStats = null;
 let pendingDecisions = [];
 let historyWrites = Promise.resolve();
 let flushInFlight = null;
+let uploadScheduling = Promise.resolve();
 let cloudAuth = null;
 let pairing = null;
 const runWaits = createRunWaits();
@@ -123,10 +126,10 @@ const feigua = createFeiguaRuntime({
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
-  persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload,
+  persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload:requestUpload,
   savePage:async(page,runId,legacy=false)=>{
     const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy})));
-    await scheduleUpload();
+    void requestUpload();
     return items;
   }
 });
@@ -135,20 +138,19 @@ const xingtu = createXingtuRuntime({
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
-  persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload,
+  persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload:requestUpload,
   savePage:async(page,runId,legacy=false)=>{
     const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,"automatic"),uploadEligible:!legacy && /^\d{1,30}$/.test(String(row.xingtuId || ''))})));
-    await scheduleUpload();
+    void requestUpload();
     return items;
   }
 });
 const kuaishou = createKuaishouRuntime({
   settings:()=>kuaishouConfig.settings,rules:()=>kuaishouConfig.rules,authorize:checkCloudConnection,
   ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
-  persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload,recordDecision,
+  persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   collect:async(observation,profile,decision,owner)=>{
-    reserveQueue(1);
     await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'kuaishou',accountPlatform:'kuaishou'}]);
     const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
       dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
@@ -162,7 +164,6 @@ const kuaishou = createKuaishouRuntime({
 });
 function collectBilibili(observation,profile,decision,owner) {
   return (async()=>{
-    reserveQueue(1);
     await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'bilibili',accountPlatform:'bilibili'}]);
     const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
       dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
@@ -180,7 +181,7 @@ function createBilibiliSurfaceRuntime(surface, config) {
   return createBilibiliRuntime({
     settings:()=>config().settings,rules:()=>config().rules,authorize:checkCloudConnection,
     ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
-    persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload,recordDecision,
+    persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
     recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
     collect:collectBilibili
   }, {surface});
@@ -211,8 +212,8 @@ function incrementForSession(sessionId,key,amount=1) {
 }
 function reserveQueue(count) {
   const settled=new Set(['written','duplicate','dry-run']);
-  const retained=outbox.filter(item=>!settled.has(item.status));
-  if(retained.length+count>MAX_OUTBOX) throw Error('共享上传队列已满，请完成上传后继续；待上传数据已保留');
+  // The collection journal stays durable even if uploads are slower than collection.
+  // Only old settled entries are disposable; the uploader applies its own staging cap.
   let excess=Math.max(0,outbox.length+count-MAX_OUTBOX);
   outbox=outbox.filter(item=>{if(excess && settled.has(item.status)){excess--;return false;}return true;});
 }
@@ -264,7 +265,7 @@ function isRecommendationFeedUrl(value) {
 async function initialize() {
   if (initialized) return initialized;
   initialized = (async () => {
-    const saved = splitLegacyBilibiliStorage(await chrome.storage.local.get([...Object.values(STORAGE_KEYS),"draFeiguaBrowsing","draXingtuBrowsing","draXingtuConfig","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliConfig","draBilibiliPopular","draBilibiliPopularConfig"]));
+    const saved = splitLegacyBilibiliStorage(await chrome.storage.local.get([...Object.values(STORAGE_KEYS),CREATOR_UPLOAD_BACKFILL_KEY,"draFeiguaBrowsing","draXingtuBrowsing","draXingtuConfig","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliConfig","draBilibiliPopular","draBilibiliPopularConfig"]));
     browseState={...browseState,...saved.draFeiguaBrowsing};
     xingtuBrowseState={...xingtuBrowseState,...saved.draXingtuBrowsing};
     const savedRules = saved[STORAGE_KEYS.rules] || {};
@@ -348,7 +349,6 @@ async function initialize() {
     outbox = Array.isArray(saved[STORAGE_KEYS.outbox]) ? saved[STORAGE_KEYS.outbox] : [];
     await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
     await cleanupStoredObservations();
-    await enableCreatorObservationUpload();
     cloudAuth = saved[STORAGE_KEYS.cloudAuth] && typeof saved[STORAGE_KEYS.cloudAuth] === "object"
       ? saved[STORAGE_KEYS.cloudAuth]
       : null;
@@ -382,7 +382,9 @@ async function initialize() {
     await updateTaskIndicators();
     await syncScheduleAlarm();
     await syncRunStopAlarm();
-    await scheduleUpload();
+    // Large retained creator histories must not block the side panel's first status response.
+    await chrome.alarms.create(UPLOAD_ALARM, {when:Date.now()+30_000});
+    if(saved[CREATOR_UPLOAD_BACKFILL_KEY]!==true)await chrome.alarms.create(CREATOR_UPLOAD_BACKFILL_ALARM,{when:Date.now()+30_000});
     if (state.status === "running") await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
   })();
   return initialized;
@@ -638,7 +640,7 @@ async function finalizeObservationTransition(recordId, transition = {}) {
   };
   item.transitionPending = false;
   await persistWorkData();
-  if (["pending", "write-error"].includes(item.status)) await scheduleUpload();
+  if (["pending", "write-error"].includes(item.status)) void requestUpload();
   return { ok: true, recordId };
 }
 
@@ -681,7 +683,7 @@ async function pauseForRunLimit(reason) {
     state.lastScheduleResult = reason;
   }
   await setPaused(reason);
-  await scheduleUpload(true);
+  void requestUpload();
 }
 
 async function ensureDebugger(tabId) {
@@ -1043,7 +1045,27 @@ function uploadableOutbox() {
   });
 }
 
-async function scheduleUpload(force = false, retry = false) {
+function requestUpload() {
+  const task=uploadScheduling.then(async()=>{
+    if(!cloudReady())return;
+    const when=Date.now()+30_000;
+    const existing=await chrome.alarms.get(UPLOAD_ALARM);
+    if(!existing || existing.scheduledTime>when)await chrome.alarms.create(UPLOAD_ALARM,{when});
+  }).catch(error=>{
+    state.lastError=`研究台上传调度失败：${error?.message || String(error)}`;
+    void persistState().catch(()=>undefined);
+  });
+  uploadScheduling=task;
+  return task;
+}
+
+function scheduleUpload(force = false, retry = false) {
+  const task=uploadScheduling.then(()=>planUpload(force,retry));
+  uploadScheduling=task.catch(()=>undefined);
+  return task;
+}
+
+async function planUpload(force = false, retry = false) {
   await stageFeiguaObservations();
   await stageXingtuObservations();
   const pending = uploadableOutbox();
@@ -1065,6 +1087,15 @@ async function handleUploadAlarm() {
   try { await flushOutbox({ force: true }); }
   catch (error) { state.lastError = `研究台同步失败：${error?.message || String(error)}`; await persistState(); }
   finally { await scheduleUpload(false, true); }
+}
+
+async function runCreatorUploadBackfill() {
+  await initialize();
+  const saved=await chrome.storage.local.get(CREATOR_UPLOAD_BACKFILL_KEY);
+  if(saved[CREATOR_UPLOAD_BACKFILL_KEY]===true)return;
+  await enableCreatorObservationUpload();
+  await chrome.storage.local.set({[CREATOR_UPLOAD_BACKFILL_KEY]:true});
+  await requestUpload();
 }
 
 function flushOutbox(options = {}) {
@@ -1133,11 +1164,6 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     if (cloudAuth !== uploadingAuth) return { status: "auth_error", reason: "connection_changed" };
     if (cloudAuth) cloudAuth.expired = true;
     await persistCloudAuth();
-    if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
-    await pauseLiveBilibili("研究台授权已失效，请重新连接");
-    if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台授权已失效，请重新登录并连接");
-    if (xingtu.active() && !xingtu.state().runSettings?.dryRun) await xingtu.pause("研究台授权已失效，请重新登录并连接");
-    if (isActiveRunStatus() && !settings.dryRun) await setPaused("研究台授权已失效，请重新登录并连接");
     state.lastError = "研究台授权已失效，请重新连接";
     await persistState();
     return { status: "auth_error", reason: result.payload?.error || "unauthorized" };
@@ -1202,7 +1228,7 @@ async function checkCloudConnection() {
   cloudAuth.expired = false;
   if (result.payload?.account) cloudAuth.account = accountProfile(result.payload.account, cloudAuth.user_id);
   await persistCloudAuth();
-  await scheduleUpload(true);
+  void requestUpload();
   return { ok: true, userId: cloudAuth.user_id || "", destination: CLOUD_DESTINATION };
 }
 
@@ -1260,7 +1286,7 @@ async function pollPairing() {
   };
   pairing = null;
   await persistCloudAuth();
-  await scheduleUpload(true);
+  void requestUpload();
   return cloudStatusSnapshot();
 }
 
@@ -1321,7 +1347,6 @@ function candidatePayload(observation, profile, videoDecision, creatorDecision, 
 async function handleObservation(observation, profile, panelRecovered = false) {
   await initialize();
   if (state.status !== "running") return { continue: false, reason: "任务未运行" };
-  try { reserveQueue(1); } catch(error) { await setPaused(error.message); return {continue:false,reason:error.message}; }
   const limitReason = getRunLimitReason(state, settings);
   if (limitReason) {
     await pauseForRunLimit(limitReason);
@@ -1481,7 +1506,6 @@ async function handleObservation(observation, profile, panelRecovered = false) {
 async function handlePanelSkipped(observation, reason) {
   await initialize();
   if (state.status !== "running") return { continue: false, reason: "任务未运行" };
-  try { reserveQueue(1); } catch(error) { await setPaused(error.message); return {continue:false,reason:error.message}; }
   const limitReason = getRunLimitReason(state, settings);
   if (limitReason) {
     await pauseForRunLimit(limitReason);
@@ -1682,7 +1706,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
     const runtimeStatus = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 2).catch(() => null);
     if (runtimeStatus) await applyPageRuntimeState(runtimeStatus);
     await persistState();
-    await scheduleUpload(true);
+    void requestUpload();
     return state;
   } catch (error) {
     if (state.runId === runId && isActiveRunStatus()) {
@@ -1778,7 +1802,7 @@ async function resumeRun({ windowId } = {}) {
     await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
     await persistState();
     await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId, resume });
-    await scheduleUpload(true);
+    void requestUpload();
     return state;
   } catch (error) {
     if (state.runId === runId && isActiveRunStatus()) await setPaused("恢复本轮失败", error?.message || String(error));
@@ -1815,7 +1839,7 @@ async function stopRun() {
   if (closeFeedTab && Number.isInteger(feedTabId)) {
     await chrome.tabs.remove(feedTabId).catch(() => undefined);
   }
-  await scheduleUpload(true);
+  void requestUpload();
   await persistState();
   return state;
 }
@@ -1861,7 +1885,7 @@ async function inspectRuntime() {
     await restartContentLoop(tab, runtimeStalled(state.runtime) ? "当前步骤超时且没有完成进展" : "页面循环中断");
   }
   await persistState();
-  await scheduleUpload();
+  void requestUpload();
 }
 
 async function handleRunStopAlarm() {
@@ -1963,6 +1987,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if ([FEIGUA_ALARM, FEIGUA_STOP_ALARM].includes(alarm.name)) initialize().then(()=>feigua.inspect()).catch(error=>feigua.pause(error.message));
   if ([XINGTU_ALARM, XINGTU_STOP_ALARM].includes(alarm.name)) initialize().then(()=>xingtu.inspect()).catch(error=>xingtu.pause(error.message));
   if (alarm.name === UPLOAD_ALARM) handleUploadAlarm().catch(() => undefined);
+  if (alarm.name === CREATOR_UPLOAD_BACKFILL_ALARM) runCreatorUploadBackfill().catch(() => chrome.alarms.create(CREATOR_UPLOAD_BACKFILL_ALARM,{when:Date.now()+60_000}));
   if (alarm.name === WATCHDOG_ALARM) watchdog().catch((error) => setPaused("后台巡检失败", error.message));
   if (alarm.name === RUN_STOP_ALARM) handleRunStopAlarm().catch((error) => setPaused("到点停止任务失败", error.message));
   if (SCHEDULED_PLATFORMS.some((item) => item.alarm === alarm.name)) handleScheduledAlarm(alarm).catch((error) => {
@@ -2332,7 +2357,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.platform === "xingtu") return {ok:true,state:await xingtu.pause()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
         await setPaused("用户暂停");
-        await scheduleUpload(true);
+        void requestUpload();
         return { ok: true, state };
       case "DRA_STOP":
         if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.stop()};
@@ -2428,7 +2453,7 @@ async function captureBrowsePage(page,sender) {
   const runId=`feigua-browse:${day}`;
   try {
     const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation({...row,ruleDecision:evaluateFeiguaRules(page.rows.filter(item=>rowAccountKey(item)===rowAccountKey(row)),rules)},page,runId,'browse'),uploadEligible:true})));
-    await scheduleUpload();
+    void requestUpload();
     const owner={runId,startedAt:page.capturedAt,route:{platform:'feigua'}};
     for(const item of items)recordDecision(item.raw.ruleDecision,item,null,owner);
     browseState.lastCapturedAt=page.capturedAt; browseState.lastPageUrl=page.pageUrl; browseState.lastError='';
@@ -2450,13 +2475,17 @@ function stageFeiguaObservations() {
   if(stagingObservations)return stagingObservations;
   stagingObservations=(async()=>{
     const items=await pendingObservations();
+    const queuedIds=[];
     for(const item of items) {
       if(item.sourcePlatform!=='feigua')continue;
       // Leave durable observations waiting while a full outbox drains.
       if(!outbox.some(queued=>queued.id===item.id) && outbox.filter(queued=>!['written','duplicate','dry-run'].includes(queued.status)).length>=MAX_OUTBOX)break;
       if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',feiguaObservationRecord(item),'',{owner:{runId:item.sessionId,startedAt:item.firstObservedAt}});
+      queuedIds.push(item.id);
+    }
+    if(queuedIds.length){
       await persistWorkData();
-      await markObservationsQueued([item.id]);
+      await markObservationsQueued(queuedIds);
     }
   })().finally(()=>{stagingObservations=null;});
   return stagingObservations;
@@ -2470,7 +2499,7 @@ async function captureXingtuBrowsePage(page,sender) {
   const runId=`xingtu-browse:${day}`;
   try {
     const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,'browse'),uploadEligible:true})));
-    await scheduleUpload();
+    void requestUpload();
     const owner={runId,startedAt:page.capturedAt,route:{platform:'xingtu'}};
     for(const item of items)recordDecision({code:'XINGTU_OBSERVED',reasons:['浏览采集已保存；自动翻页保持暂停']},item,null,owner);
     xingtuBrowseState.lastCapturedAt=page.capturedAt; xingtuBrowseState.lastPageUrl=page.pageUrl; xingtuBrowseState.lastError='';
@@ -2489,12 +2518,16 @@ function stageXingtuObservations() {
   if(stagingXingtuObservations)return stagingXingtuObservations;
   stagingXingtuObservations=(async()=>{
     const items=await pendingObservations();
+    const queuedIds=[];
     for(const item of items) {
       if(item.sourcePlatform!=='xingtu')continue;
       if(!outbox.some(queued=>queued.id===item.id) && outbox.filter(queued=>!['written','duplicate','dry-run'].includes(queued.status)).length>=MAX_OUTBOX)break;
       if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',xingtuObservationRecord(item),'',{owner:{runId:item.sessionId,startedAt:item.firstObservedAt}});
+      queuedIds.push(item.id);
+    }
+    if(queuedIds.length){
       await persistWorkData();
-      await markObservationsQueued([item.id]);
+      await markObservationsQueued(queuedIds);
     }
   })().finally(()=>{stagingXingtuObservations=null;});
   return stagingXingtuObservations;
