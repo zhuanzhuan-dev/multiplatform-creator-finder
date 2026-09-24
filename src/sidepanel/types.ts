@@ -114,7 +114,6 @@ export interface Settings {
   xingtuDelay?: { minSeconds: number; maxSeconds: number };
   bilibiliBatchDelay?: { minSeconds: number; maxSeconds: number };
   feiguaSchedule?: ScheduleSettings;
-  xingtuUploadEnabled?: boolean;
   engagement?: { rate: number; like: boolean; collect: boolean; follow: boolean };
   dwell?: DwellPolicy;
   target?: RunTarget;

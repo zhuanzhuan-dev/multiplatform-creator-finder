@@ -2,7 +2,7 @@ import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './li
 import { createBilibiliRuntime, splitLegacyBilibiliStorage, BILIBILI_ALARM, BILIBILI_STOP_ALARM, BILIBILI_POPULAR_ALARM, BILIBILI_POPULAR_STOP_ALARM } from './lib/bilibili-task.js';
 import { bilibiliFeedbackFields } from './lib/bilibili-api.js';
 import { mergeBilibiliRules, validateBilibiliRules } from './lib/bilibili-rules.js';
-import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, normalizeXingtuObservation, observationRecord as feiguaObservationRecord, xingtuObservationRecord, observationStatus, xingtuObservedCreators, pendingObservations, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
+import { saveObservations, normalizeDouyinObservation, exportObservations, normalizeFeiguaObservation, normalizeXingtuObservation, observationRecord as feiguaObservationRecord, xingtuObservationRecord, observationStatus, xingtuObservedCreators, pendingObservations, enableCreatorObservationUpload, markObservationsQueued, markObservationsUploaded, cleanupObservations } from './lib/observations.js';
 import { evaluateFeiguaRules } from './lib/feigua-rules.js';
 import { rowAccountKey } from './lib/feigua-parser.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
@@ -125,7 +125,7 @@ const feigua = createFeiguaRuntime({
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload,
   savePage:async(page,runId,legacy=false)=>{
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy && !feigua.state().runSettings?.dryRun})));
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy})));
     await scheduleUpload();
     return items;
   }
@@ -137,8 +137,8 @@ const xingtu = createXingtuRuntime({
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload,
   savePage:async(page,runId,legacy=false)=>{
-    const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,"automatic"),uploadEligible:!legacy && xingtuConfig.settings.xingtuUploadEnabled===true && !xingtu.state().runSettings?.dryRun})));
-    await stageXingtuObservations();
+    const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,"automatic"),uploadEligible:!legacy && /^\d{1,30}$/.test(String(row.xingtuId || ''))})));
+    await scheduleUpload();
     return items;
   }
 });
@@ -304,8 +304,6 @@ async function initialize() {
       settings:mergeXingtuSettings(previousXingtu?.settings || {
         xingtuTarget:settings.xingtuTarget,
         xingtuDelay:settings.xingtuDelay,
-        xingtuUploadEnabled:settings.xingtuUploadEnabled,
-        dryRun:settings.dryRun,
         keepSystemAwake:settings.keepSystemAwake
       }, { scheduleOptIn: previousXingtu?.scheduleOptIn === true }),
       rules:mergeXingtuRules(previousXingtu?.rules || {xingtuKeywords:rules.xingtuKeywords}),
@@ -350,6 +348,7 @@ async function initialize() {
     outbox = Array.isArray(saved[STORAGE_KEYS.outbox]) ? saved[STORAGE_KEYS.outbox] : [];
     await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
     await cleanupStoredObservations();
+    await enableCreatorObservationUpload();
     cloudAuth = saved[STORAGE_KEYS.cloudAuth] && typeof saved[STORAGE_KEYS.cloudAuth] === "object"
       ? saved[STORAGE_KEYS.cloudAuth]
       : null;
@@ -1040,8 +1039,6 @@ function uploadableOutbox() {
     if (item.transitionPending || Number(item.retryAt || 0)>Date.now()) return false;
     if (!["pending", "write-error", "failed"].includes(item.status)) return false;
     const record = item.payload;
-    const isXingtu = record?.rpa_feedback?.source_platform === 'xingtu' || record?.rpa_feedback?.source === 'xingtu-author-market' || item.sessionId && item.sessionId === xingtu.state().runId;
-    if (isXingtu && xingtuConfig.settings.xingtuUploadEnabled !== true) return false;
     return record && typeof record === "object" && typeof record.record_id === "string" && Number.isInteger(record.feed_index);
   });
 }
@@ -1051,7 +1048,7 @@ async function scheduleUpload(force = false, retry = false) {
   await stageXingtuObservations();
   const pending = uploadableOutbox();
   if (!pending.length || !cloudReady()) {
-    const retries=outbox.filter(item=>['pending','write-error','failed'].includes(item.status) && item.retryAt>Date.now() && (xingtuConfig.settings.xingtuUploadEnabled===true || item.payload?.rpa_feedback?.source_platform!=='xingtu'));
+    const retries=outbox.filter(item=>['pending','write-error','failed'].includes(item.status) && item.retryAt>Date.now());
     if(cloudReady() && retries.length)await chrome.alarms.create(UPLOAD_ALARM,{when:Math.min(...retries.map(item=>item.retryAt))});
     else await chrome.alarms.clear(UPLOAD_ALARM);
     return;
@@ -1532,10 +1529,9 @@ async function saveConfiguration(message) {
   if (!['douyin','kuaishou','bilibili','bilibili-popular','feigua','xingtu'].includes(platform)) throw new Error('请选择具体平台后修改设置');
   const configPlatform = platform;
   if (configPlatform === 'xingtu') {
-    if (xingtu.active() && message.settings && JSON.stringify(mergeXingtuSettings({...xingtuConfig.settings,dryRun:message.settings.dryRun,keepSystemAwake:message.settings.keepSystemAwake}, { scheduleOptIn: xingtuConfig.scheduleOptIn === true })) !== JSON.stringify(xingtuConfig.settings)) throw new Error('请先暂停当前平台任务再修改设置');
+    if (xingtu.active() && message.settings && JSON.stringify(mergeXingtuSettings({...xingtuConfig.settings,keepSystemAwake:message.settings.keepSystemAwake}, { scheduleOptIn: xingtuConfig.scheduleOptIn === true })) !== JSON.stringify(xingtuConfig.settings)) throw new Error('请先暂停当前平台任务再修改设置');
     const nextSettings = mergeXingtuSettings({
       ...xingtuConfig.settings,
-      dryRun: message.settings ? message.settings.dryRun : xingtuConfig.settings.dryRun,
       keepSystemAwake: message.settings ? message.settings.keepSystemAwake !== false : xingtuConfig.settings.keepSystemAwake
     }, { scheduleOptIn: xingtuConfig.scheduleOptIn === true });
     const nextRules = mergeXingtuRules(message.rules || xingtuConfig.rules);
@@ -2431,7 +2427,7 @@ async function captureBrowsePage(page,sender) {
   const day=new Date().toISOString().slice(0,10);
   const runId=`feigua-browse:${day}`;
   try {
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation({...row,ruleDecision:evaluateFeiguaRules(page.rows.filter(item=>rowAccountKey(item)===rowAccountKey(row)),rules)},page,runId,'browse'),uploadEligible:!settings.dryRun})));
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation({...row,ruleDecision:evaluateFeiguaRules(page.rows.filter(item=>rowAccountKey(item)===rowAccountKey(row)),rules)},page,runId,'browse'),uploadEligible:true})));
     await scheduleUpload();
     const owner={runId,startedAt:page.capturedAt,route:{platform:'feigua'}};
     for(const item of items)recordDecision(item.raw.ruleDecision,item,null,owner);
@@ -2473,8 +2469,8 @@ async function captureXingtuBrowsePage(page,sender) {
   const day=new Date().toISOString().slice(0,10);
   const runId=`xingtu-browse:${day}`;
   try {
-    const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,'browse'),uploadEligible:xingtuConfig.settings.xingtuUploadEnabled===true && !xingtuConfig.settings.dryRun})));
-    await stageXingtuObservations();
+    const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,'browse'),uploadEligible:true})));
+    await scheduleUpload();
     const owner={runId,startedAt:page.capturedAt,route:{platform:'xingtu'}};
     for(const item of items)recordDecision({code:'XINGTU_OBSERVED',reasons:['浏览采集已保存；自动翻页保持暂停']},item,null,owner);
     xingtuBrowseState.lastCapturedAt=page.capturedAt; xingtuBrowseState.lastPageUrl=page.pageUrl; xingtuBrowseState.lastError='';
@@ -2490,7 +2486,6 @@ async function captureXingtuBrowsePage(page,sender) {
   }
 }
 function stageXingtuObservations() {
-  if(xingtuConfig.settings.xingtuUploadEnabled!==true)return Promise.resolve();
   if(stagingXingtuObservations)return stagingXingtuObservations;
   stagingXingtuObservations=(async()=>{
     const items=await pendingObservations();

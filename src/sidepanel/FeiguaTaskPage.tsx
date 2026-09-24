@@ -15,7 +15,6 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
   const details=snapshot.feigua;
   const active=state.status==='running' || state.status==='starting';
   const resumable=canResumeRun(state);
-  const localOnly=Boolean(snapshot.settings?.dryRun || state.runSettings?.dryRun);
   const [limit,setLimit]=useState('50');
   const [minDelay,setMinDelay]=useState('4');
   const [maxDelay,setMaxDelay]=useState('6');
@@ -48,7 +47,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
   const busy=Boolean(extension.busyAction);
   return <>
     <section className="feigua-task-card" aria-labelledby="feiguaTaskTitle">
-      <div className="feigua-task-heading"><h2 id="feiguaTaskTitle">飞瓜视频库采集</h2><span className="badge">{localOnly?'仅本地保存':'自动上传'}</span></div>
+      <div className="feigua-task-heading"><h2 id="feiguaTaskTitle">飞瓜视频库采集</h2><span className="badge">{snapshot.cloud?.connected?'自动上传':'等待连接'}</span></div>
 
       <div className="feigua-progress" aria-live="polite"><strong>{Math.max(0,(details?.pageCount || 0)-(state.batchStartPages || 0))}<small> / {state.runTarget?.maxPages || savedLimit} 页（本批）</small></strong><span>{statusLabel[state.status || ''] || '准备开始'}</span></div>
       <dl className="feigua-metrics">
@@ -63,7 +62,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
       {state.pauseReason || state.lastError ? <p className="feigua-recovery" role="status">{errorMessage(state.pauseReason || state.lastError)}</p> : null}
       {state.restUntil ? <p className="feigua-recovery" role="status">建议休息至 {new Date(state.restUntil).toLocaleString('zh-CN')}。{now < state.restUntil ? '提前继续可能触发访问限制。' : '建议休息时间已到，可手动继续。'}继续后开始下一批，累计记录保留。</p> : null}
       <div className="actions">
-        {active ? <button className="primary" disabled={busy} onClick={()=>void extension.run('pause',draft)}>{state.status==='starting'?'取消恢复':'暂停自动翻页'}</button> : <button className="primary" disabled={busy || (!localOnly && !snapshot.cloud?.connected)} onClick={()=>void extension.run(resumable?'resume':'start',draft)}>{resumable?(state.restUntil && now<state.restUntil?'知晓风险，提前继续':'继续采集'):'开始新一轮采集'}</button>}
+        {active ? <button className="primary" disabled={busy} onClick={()=>void extension.run('pause',draft)}>{state.status==='starting'?'取消恢复':'暂停自动翻页'}</button> : <button className="primary" disabled={busy || !snapshot.cloud?.connected} onClick={()=>void extension.run(resumable?'resume':'start',draft)}>{resumable?(state.restUntil && now<state.restUntil?'知晓风险，提前继续':'继续采集'):'开始新一轮采集'}</button>}
         <button disabled={busy || !state.runId || state.status==='stopped'} onClick={()=>void extension.run('stop',draft)}>结束并保存</button>
       </div>
       <button className="feigua-open-page" disabled={busy} onClick={()=>void extension.openFeigua()}>打开飞瓜视频库</button>
@@ -82,7 +81,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
           <p className="field-note">从进入本页起计算间隔；身份请求结束后至少再隔 1 秒翻页。每批结束建议休息 3 小时。</p>
         </section>
         <section className="setting-group">
-          <label className="check"><input type="checkbox" checked={snapshot.browsing?.enabled!==false} onChange={event=>{void sendRuntime({type:'DRA_SET_FEIGUA_BROWSING',enabled:event.target.checked}).then(()=>extension.refresh()).catch(error=>setNotice(String(error)));}} />随浏览保存飞瓜数据</label>
+          <label className="check"><input type="checkbox" checked={snapshot.browsing?.enabled!==false} onChange={event=>{void sendRuntime({type:'DRA_SET_FEIGUA_BROWSING',enabled:event.target.checked}).then(()=>extension.refresh()).catch(error=>setNotice(String(error)));}} />随浏览采集并上传飞瓜数据</label>
           <p className="field-note">支持视频库和详情页 · 已保存 {snapshot.browsing?.count || 0} 条观察</p>
           {snapshot.browsing?.lastError ? <p role="alert">{errorMessage(snapshot.browsing.lastError)}</p> : null}
         </section>
@@ -111,7 +110,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
       <p>自动翻页使用飞瓜当前筛选结果，按整账号判断。后续页面命中负向词会移除此前候选；浏览采集按本次页面的同账号内容判断。正向词留空或未命中时保留待人工确认。暂停后继续沿用本轮规则，保留计数和去重记录。</p>
       <p>随浏览采集适配视频库、视频详情和达人详情，用户负责点击，插件只读保存。进入详情会暂停自动翻页。重新打开网页后，请核对飞瓜筛选条件。</p>
       <p>自动翻页先滚动列表触发懒加载，行数据稳定后保存；图片最多额外等待 8 秒。列表等待 30 秒后仍未就绪时记录失败，并尝试下一页。达到批次页数暂停，到达末页结束。随机等待仍有触发访问限制的风险。</p>
-      <p>{localOnly?'本轮结果只保存在本机，正式采集的历史待上传记录继续发送。':'每页保存后进入共用上传队列。'}</p>
+      <p>每页保存后进入共用上传队列；上传失败的记录保留在本机重试。</p>
     </details>
   </>;
 }

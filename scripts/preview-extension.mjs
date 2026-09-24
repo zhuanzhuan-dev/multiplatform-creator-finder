@@ -84,8 +84,9 @@ const browserMock = `<script>
     contentBlacklist: ["动漫", "电影"],
     excludeTnames: []
   };
-  snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:"kuaishou",surface:"recommend",label:"快手推荐"},runId:"preview-ks",feedTabId:103}, {...snapshot.state,route:{platform:"bilibili",surface:"recommend",label:"B站首页推荐"},runId:"preview-bl",feedTabId:104,status:"idle"}, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}];
+  snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:"kuaishou",surface:"recommend",label:"快手推荐"},runId:"preview-ks",feedTabId:103}, {...snapshot.state,route:{platform:"bilibili",surface:"recommend",label:"B站首页推荐"},runId:"preview-bl",feedTabId:104,status:"idle"}, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}, {...snapshot.state,route:{platform:'xingtu',surface:'market',label:'星图达人广场'},runId:'preview-xt',feedTabId:105,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,stats:{...snapshot.state.stats,pagesCollected:12,matched:190,rejectedProfiles:4,duplicates:8},status:'paused',pauseReason:'演示：已暂停自动翻页'}];
   snapshot.feigua={pageCount:50,pageNumber:'50',finalized:false,candidates:[{name:'示例美食账号',followers:'12w'},{name:'示例旅行账号',followers:'8.5w'}]};
+  snapshot.xingtu={pageCount:12,pageNumber:'12',finalized:false,candidates:[]};
   const storageListeners = new Set();
   const previewStorageKey = "draPreviewStorage";
   const readStored = () => JSON.parse(localStorage.getItem(previewStorageKey) || "{}");

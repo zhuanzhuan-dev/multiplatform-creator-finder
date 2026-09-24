@@ -69,11 +69,11 @@ export default function App() {
           {cloudPanel}
           <ThemePicker />
           <LauncherSettings />
-          <details className="debug-settings"><summary>开发调试</summary><label className="check"><input type="checkbox" checked={draft.dryRun} disabled={configurationLocked || Boolean(extension.busyAction)} onChange={(event) => { const next = { ...draft, dryRun: event.target.checked }; setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} />本地测试（不连接、不上传）</label><RawCaptureSettings /></details>
+          <details className="debug-settings"><summary>开发调试</summary><label className="check"><input type="checkbox" checked={draft.dryRun} disabled={configurationLocked || Boolean(extension.busyAction)} onChange={(event) => { const next = { ...draft, dryRun: event.target.checked }; setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} />抖音、快手与 B 站本地测试</label><RawCaptureSettings /></details>
         </PreferencesMenu></div>
       </header>
       {!connected ? cloudPanel : <div className="connection-summary">研究台已连接 · 结果自动同步</div>}
-      {draft.dryRun ? <p className="test-mode-note">新任务使用本地测试模式 · 新采集结果只存本机，已有正式上传队列继续同步</p> : null}
+      {draft.dryRun ? <p className="test-mode-note">抖音、快手与 B 站新任务使用本地测试模式；飞瓜与星图继续自动上传研究台</p> : null}
       {extension.selectedPlatform!=='auto' ? <p className="field-note">正在手动查看{({feigua:'飞瓜',xingtu:'星图',kuaishou:'快手',bilibili:'B站首页','bilibili-popular':'B站热门',douyin:'抖音'} as Record<string,string>)[extension.selectedPlatform] || '所选'}任务，当前网页不会改变。</p> : null}
       {state.route?.platform === 'feigua' ? <FeiguaTaskPage extension={extension} draft={draft} now={now} />
         : state.route?.platform === 'xingtu' ? <XingtuTaskPage extension={extension} draft={draft} now={now} />

@@ -15,7 +15,6 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
   const details=snapshot.xingtu;
   const active=state.status==='running' || state.status==='starting';
   const resumable=canResumeRun(state);
-  const localOnly=snapshot.settings?.xingtuUploadEnabled !== true;
   const [limit,setLimit]=useState('50');
   const [minDelay,setMinDelay]=useState('4');
   const [maxDelay,setMaxDelay]=useState('6');
@@ -45,14 +44,14 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
   const busy=Boolean(extension.busyAction);
   return <>
     <section className="feigua-task-card"><h2>浏览自动采集</h2>
-      <label className="check"><input type="checkbox" checked={snapshot.browsing?.enabled!==false} onChange={event=>{void sendRuntime({type:'DRA_SET_XINGTU_BROWSING',enabled:event.target.checked}).then(()=>extension.refresh()).catch(error=>setNotice(String(error)));}} />随浏览保存星图数据</label>
+      <label className="check"><input type="checkbox" checked={snapshot.browsing?.enabled!==false} onChange={event=>{void sendRuntime({type:'DRA_SET_XINGTU_BROWSING',enabled:event.target.checked}).then(()=>extension.refresh()).catch(error=>setNotice(String(error)));}} />随浏览采集并上传星图数据</label>
       <p className="field-note">适配达人广场和达人主页。用户负责点击，插件只读保存；暂停或结束自动翻页后继续生效。进入达人主页会暂停自动翻页。</p>
       <p className="field-note">{snapshot.pageRoute?.platform==='xingtu' ? ['market','creator'].includes(snapshot.pageRoute.surface) ? `当前页面：${snapshot.pageRoute.label}` : '当前星图页面尚未适配浏览采集' : '切换至星图页面后进行浏览采集'}</p>
       <p className="field-note">已保存 {snapshot.browsing?.count || 0} 条观察{snapshot.browsing?.lastCapturedAt ? ` · 最近浏览采集 ${new Date(snapshot.browsing.lastCapturedAt).toLocaleTimeString('zh-CN')}` : ''}</p>
       {snapshot.browsing?.lastError ? <p role="alert">{errorMessage(snapshot.browsing.lastError)}</p> : null}
     </section>
     <section className="feigua-task-card" aria-labelledby="xingtuTaskTitle">
-      <div className="feigua-task-heading"><h2 id="xingtuTaskTitle">星图达人广场采集</h2><span className="badge">{localOnly?'仅本地保存':'汇总后上传'}</span></div>
+      <div className="feigua-task-heading"><h2 id="xingtuTaskTitle">星图达人广场采集</h2><span className="badge">{snapshot.cloud?.connected?'自动上传':'等待连接'}</span></div>
       <p className="field-note">使用已登录星图账号当前可见的达人广场筛选结果，逐页提取达人；命中规避词时排除整个账号。</p>
       <div className="feigua-progress" aria-live="polite"><strong>{Math.max(0,(details?.pageCount || 0)-(state.batchStartPages || 0))}<small> / {currentBatchLimit} 页（本批）</small></strong><span>{statusLabel[state.status || ''] || '准备开始'}</span></div>
       {state.runId && savedLimit !== currentBatchLimit && state.status !== 'stopped' ? <p className="field-note">本批沿用启动时的 {currentBatchLimit} 页目标；下一批按已保存的 {savedLimit} 页采集。</p> : null}
@@ -66,11 +65,11 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
       {state.pauseReason || state.lastError ? <p className="feigua-recovery" role="status">{errorMessage(state.pauseReason || state.lastError)}</p> : null}
       {state.restUntil ? <p className="feigua-recovery" role="status">建议休息至 {new Date(state.restUntil).toLocaleString('zh-CN')}。{now < state.restUntil ? '提前继续可能触发访问限制。' : '建议休息时间已到，可手动继续。'}继续后开始下一批，累计记录保留。</p> : null}
       <div className="actions">
-        {active ? <button className="primary" disabled={busy} onClick={()=>void extension.run('pause',draft)}>{state.status==='starting'?'取消恢复':'暂停自动翻页'}</button> : <button className="primary" disabled={busy || (!localOnly && !snapshot.cloud?.connected)} onClick={()=>void extension.run(resumable?'resume':'start',draft)}>{resumable?(state.restUntil && now<state.restUntil?'知晓风险，提前继续':'继续采集'):'开始新一轮采集'}</button>}
+        {active ? <button className="primary" disabled={busy} onClick={()=>void extension.run('pause',draft)}>{state.status==='starting'?'取消恢复':'暂停自动翻页'}</button> : <button className="primary" disabled={busy || !snapshot.cloud?.connected} onClick={()=>void extension.run(resumable?'resume':'start',draft)}>{resumable?(state.restUntil && now<state.restUntil?'知晓风险，提前继续':'继续采集'):'开始新一轮采集'}</button>}
         <button disabled={busy || !state.runId || state.status==='stopped'} onClick={()=>void extension.run('stop',draft)}>结束并保存</button>
       </div>
       <button className="feigua-open-page" disabled={busy} onClick={()=>void extension.openXingtu()}>打开星图达人广场</button>
-      <p className="field-note">继续时自动恢复采集页，保留计数和账号去重记录；已采集的页面会跳过重复内容。重新打开网页后，请核对星图筛选条件。{localOnly?'本轮结果只保存在本机，星图历史待上传记录也暂停发送。':'结束后汇总到共用上传队列。'}</p>
+      <p className="field-note">继续时自动恢复采集页，保留计数和账号去重记录；已采集的页面会跳过重复内容。重新打开网页后，请核对星图筛选条件。每页保存后自动上传研究台；上传失败的记录保留在本机重试。</p>
     </section>
     {extension.notice.text ? <p className={`message ${extension.notice.error?'error':''}`} role="status">{extension.notice.text}</p> : null}
     <details className="disclosure feigua-config">
