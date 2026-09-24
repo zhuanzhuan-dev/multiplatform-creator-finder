@@ -1,7 +1,8 @@
 import * as core from "../lib/xingtu-parser.js";
+import { xingtuApiPage, xingtuApiProblem } from './xingtu-api-cache.js';
 
 const MARKET_HEADERS = ["达人信息", "预期CPM", "预期播放量", "互动率", "完播率", "爆文率"];
-const AUTHOR_HREF = /\/ad\/creator\/author(?:\/douyin)?\//i;
+const AUTHOR_HREF = /\/ad\/creator\/(?:author-homepage\/douyin-video|author(?:\/douyin)?)\//i;
 
 function ownText(element) {
   return Array.from(element.childNodes || [])
@@ -156,7 +157,7 @@ function extractRow(row, headers = []) {
     || cells[headers.indexOf("达人信息")]
     || cells[0];
   const anchor = authorAnchors(row)[0] || Array.from(row.querySelectorAll("a[href]")).find((link) => AUTHOR_HREF.test(link.getAttribute("href") || "") || /xingtu\.cn\/ad\/creator/i.test(link.href || ""));
-  const profileUrl = anchor ? new URL(anchor.href, location.href).href : "";
+  const profileUrl = anchor ? core.canonicalXingtuPageUrl(new URL(anchor.href, location.href).href) : "";
   const anchorName = (anchor?.getAttribute("title") || "").trim() || cleanAnchorName(anchor);
   const parsed = core.parseCardText(rawText, {
     authorName: anchorName,
@@ -176,24 +177,27 @@ function cleanAnchorName(anchor) {
 }
 
 export function collectCurrentPage() {
-  const headerRow = findHeaderRow();
-  const headers = headerRow ? headerLabels(headerRow) : [];
-  const fromTable = headerRow ? uniqueRows(rowsFromHeader(headerRow)) : [];
-  const fromLinks = uniqueRows(authorAnchors().map(rowFromAnchor).filter(Boolean));
-  const rows = fromTable.length ? fromTable : fromLinks.length ? fromLinks : genericRows();
-  const parsed = rows.map((row) => extractRow(row, headers)).filter(Boolean);
+  const pageNumber = pagination()?.number || '';
+  const response = xingtuApiPage(pageNumber);
+  const visibleNames = Array.from(document.querySelectorAll('.author-info-column .author-nickname'))
+    .filter(isRendered).map(node => node.textContent?.trim()).filter(Boolean);
+  const names = new Set(response?.rows.map(row => row.authorName) || []);
+  const settled = visibleNames.length > 0 && visibleNames.every(name => names.has(name));
+  const parsed = settled ? response.rows : [];
   return {
-    pageUrl: location.href,
-    pageNumber: pagination()?.number || "",
+    pageUrl: core.canonicalXingtuPageUrl(location.href),
+    pageNumber,
     pageTitle: document.title,
     capturedAt: new Date().toISOString(),
     rows: parsed,
+    last: response?.last === true,
     pendingImages: 0,
     diagnostics: {
-      strategy: fromTable.length ? "market-table" : fromLinks.length ? "author-link" : "generic-row",
-      markerCount: authorAnchors().length,
-      candidateCount: rows.length,
-      parsedCount: parsed.length
+      strategy: 'market-api',
+      markerCount: visibleNames.length,
+      candidateCount: response?.rows.length || 0,
+      parsedCount: parsed.length,
+      missingIdentityCount: response?.missingIdentityCount || 0
     }
   };
 }
@@ -225,6 +229,8 @@ export function pagination() {
 }
 
 export function pageAccessProblem() {
+  const apiError = xingtuApiProblem(pagination()?.number || '');
+  if (apiError) return `星图列表接口返回错误：${apiError}`;
   const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .ant-modal, .el-message-box__wrapper, .el-dialog__wrapper, [class*="captcha"], [class*="verify"]')).filter(isRendered);
   const text = dialogs.map((element) => element.innerText || "").join(" ");
   if (/验证|访问频繁|操作频繁|登录|权限不足|购买|升级|未登录/.test(text)) return "星图页面需要人工处理登录、验证或访问限制";
@@ -241,7 +247,7 @@ export function browsingSurface() {
   const path = location.pathname.replace(/\/+$/, "") || "/";
   const hash = (location.hash.split("?")[0] || "").replace(/^#/, "");
   if (path === "/ad/creator/market" || path.startsWith("/ad/creator/market/") || hash === "/ad/creator/market" || hash.startsWith("/ad/creator/market")) return "market";
-  if (/^\/ad\/creator\/author\/(?:douyin\/)?[^/]+$/.test(path) || /^\/ad\/creator\/author\/(?:douyin\/)?[^/]+$/.test(hash)) return "creator";
+  if (/^\/ad\/creator\/(?:author-homepage\/douyin-video|author(?:\/douyin)?)\/\d+$/.test(path) || /^\/ad\/creator\/(?:author-homepage\/douyin-video|author(?:\/douyin)?)\/\d+$/.test(hash)) return "creator";
   if (document.body?.innerText.includes("达人信息") && document.body.innerText.includes("预期CPM")) return "market";
   return null;
 }
@@ -253,15 +259,15 @@ export function pageProblem() {
 export function collectDetailPage(surface) {
   const visible = (selector) => Array.from(document.querySelectorAll(selector)).find(isRendered);
   const rawText = document.body.innerText.slice(0, 80000);
-  const profileUrl = location.href;
+  const profileUrl = core.canonicalXingtuPageUrl(location.href);
   const xingtuId = core.extractXingtuId(profileUrl);
   const authorName = visible("h1,h2,[class*='nickname'],[class*='author-name']")?.textContent?.trim() || "";
-  if (!authorName && !xingtuId) return { rows: [] };
+  if (!xingtuId) return { rows: [] };
   const avatar = visible("img[class*='avatar'], img");
   const row = core.parseCardText(rawText, { authorName, xingtuId, profileUrl });
   row.avatarUrl = imageUrl(avatar);
   return {
-    pageUrl: location.href,
+    pageUrl: profileUrl,
     pageTitle: document.title,
     surface,
     capturedAt: new Date().toISOString(),

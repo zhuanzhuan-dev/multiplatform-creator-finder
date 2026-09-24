@@ -78,7 +78,7 @@ const PLATFORM_ROUTES: readonly PlatformRoute[] = [
       if (path === "/ad/creator/market" || path.startsWith("/ad/creator/market/") || hash === "/ad/creator/market" || hash.startsWith("/ad/creator/market")) {
         return { surface: "market", label: "星图达人广场", runnable: true };
       }
-      if (/^\/ad\/creator\/author\/(?:douyin\/)?[^/]+$/.test(path) || /^\/ad\/creator\/author\/(?:douyin\/)?[^/]+$/.test(hash)) {
+      if (/^\/ad\/creator\/(?:author-homepage\/douyin-video|author(?:\/douyin)?)\/\d+$/.test(path) || /^\/ad\/creator\/(?:author-homepage\/douyin-video|author(?:\/douyin)?)\/\d+$/.test(hash)) {
         return { surface: "creator", label: "星图达人主页", runnable: false };
       }
       return { surface: "unknown", label: "星图：请打开达人广场", runnable: false };

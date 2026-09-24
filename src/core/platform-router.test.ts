@@ -64,6 +64,7 @@ test('Xingtu creator market is runnable; author homepage stays read-only', () =>
   assert.equal(resolveRoute('https://www.xingtu.cn/#/ad/creator/market')?.surface, 'market');
   assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author/12345')?.surface, 'creator');
   assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author/douyin/987654')?.surface, 'creator');
+  assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author-homepage/douyin-video/987654?possessStarId')?.surface, 'creator');
   assert.equal(resolveRoute('https://www.xingtu.cn/ad/creator/author/douyin/987654')?.runnable, false);
   assert.equal(resolveRoute('https://www.xingtu.cn/')?.runnable, false);
   assert.equal(isRunnableRoute('http://www.xingtu.cn/ad/creator/market'), false);

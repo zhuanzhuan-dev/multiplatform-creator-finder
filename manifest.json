@@ -100,6 +100,17 @@
         "https://xingtu.cn/*"
       ],
       "js": [
+        "page/xingtu-page-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.xingtu.cn/*",
+        "https://xingtu.cn/*"
+      ],
+      "js": [
         "content/xingtu-content.js"
       ],
       "run_at": "document_idle"

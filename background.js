@@ -7,6 +7,7 @@ import { evaluateFeiguaRules } from './lib/feigua-rules.js';
 import { rowAccountKey } from './lib/feigua-parser.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { createXingtuRuntime, XINGTU_ALARM, XINGTU_STOP_ALARM } from "./lib/xingtu-task.js";
+import { canonicalXingtuPageUrl } from './lib/xingtu-parser.js';
 import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
 import { rawSamples } from "./lib/raw-sample-store.js";
 import { sanitizeRaw } from "./lib/raw-sample.js";
@@ -2460,7 +2461,7 @@ async function captureXingtuBrowsePage(page,sender) {
   if(!xingtuBrowseState.enabled || xingtu.active() && sender.tab.id===xingtu.state().feedTabId)return {ok:true,skipped:true};
   const tab=await chrome.tabs.get(sender.tab.id);
   if(!tab.active)return {ok:true,skipped:true};
-  if(!page || page.pageUrl!==tab.url || !['market','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>40 || !page.rows.length || JSON.stringify(page).length>500000)throw Error('星图浏览数据不完整或页面已变化');
+  if(!page || page.pageUrl!==canonicalXingtuPageUrl(tab.url) || !['market','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>40 || !page.rows.length || page.rows.some(row=>!/^\d{1,30}$/.test(String(row.xingtuId || ''))) || JSON.stringify(page).length>500000)throw Error('星图浏览数据缺少稳定身份或页面已变化');
   const day=new Date().toISOString().slice(0,10);
   const runId=`xingtu-browse:${day}`;
   try {

@@ -43,6 +43,7 @@ export function installXingtuBrowsing({isRunning,cancelAutomatic}) {
   observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['src','srcset','data-src','data-original','data-lazy-src','aria-selected','aria-busy','class']});
   document.addEventListener('load',schedule,true);
   document.addEventListener('error',schedule,true);
+  document.addEventListener('dra-xingtu-api-update',schedule);
   document.addEventListener('visibilitychange',schedule);
   window.addEventListener('popstate',()=>{last='';stable='';waitingSince=null;schedule();});
   const takeover=event=>{

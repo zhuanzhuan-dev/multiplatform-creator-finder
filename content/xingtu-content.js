@@ -1,4 +1,5 @@
 import { installXingtuBrowsing } from './xingtu-browse.js';
+import { installXingtuApiCache } from './xingtu-api-cache.js';
 import { collectCurrentPage, pageFingerprint, pagination, pageProblem } from './xingtu-page.js';
 import { xingtuDelayMs } from '../lib/xingtu-policy.js';
 
@@ -46,7 +47,7 @@ async function loop(run) {
       await send(run, 'DRA_PROGRESS', { phase: 'read' });
       page ||= await readStablePage(run);
       await send(run, 'DRA_PROGRESS', { phase: 'submit' });
-      const result = await send(run, 'DRA_XINGTU_PAGE', { page: {...page, last: pagination()?.last === true} });
+      const result = await send(run, 'DRA_XINGTU_PAGE', { page: {...page, last: page.last === true || pagination()?.last === true} });
       if (!result?.continue) { run.canceled = true; return; }
       const pager = pagination();
       if (!pager) throw new Error('未识别到唯一的星图分页控件，已保存本页并暂停');
@@ -90,6 +91,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   return false;
 });
 
+if (typeof window !== 'undefined') installXingtuApiCache();
 if (typeof MutationObserver !== 'undefined' && document.body) installXingtuBrowsing({
   isRunning:()=>Boolean(current && active(current)),
   cancelAutomatic:()=>{if(current)current.canceled=true;}
