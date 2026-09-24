@@ -1106,6 +1106,7 @@ function flushOutbox(options = {}) {
 
 async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = {}) {
   await stageFeiguaObservations();
+  await stageXingtuObservations();
   if (!cloudReady()) return { status: "idle" };
   const pending = uploadableOutbox();
   if (!pending.length) return { status: "idle" };
@@ -1129,6 +1130,42 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     heartbeat: { pending: uploadableOutbox().length },
     records: list.map((item) => item.payload)
   }));
+  rows = shrinkRecordsToByteLimit(rows, encode);
+  const xingtuIds=[...new Set(rows.filter(item=>String(item.payload?.rpa_feedback?.source || '').startsWith('xingtu-') && !item.payload.sec_uid && /^\d{1,30}$/.test(String(item.payload.xingtu_id || ''))).map(item=>item.payload.xingtu_id))];
+  if(xingtuIds.length){
+    const uploadingAuth=cloudAuth;
+    let lookup;
+    try {lookup=await cloudClient.lookupXingtuSecUids(uploadingAuth.device_token,xingtuIds);}
+    catch(error){lookup={ok:false,status:503,payload:{error:error?.message || String(error)}};}
+    if(cloudAuth!==uploadingAuth)return {status:'auth_error',reason:'connection_changed'};
+    if(!lookup.ok || !Array.isArray(lookup.payload?.matches)){
+      if(lookup.status===401){
+        cloudAuth.expired=true;
+        await persistCloudAuth();
+        state.lastError='研究台授权已失效，请重新连接';
+        await persistState();
+        return {status:'auth_error'};
+      }
+      const message=`研究台星图身份查询失败：${lookup.payload?.error || lookup.status}`;
+      for(const item of rows){item.status='write-error';item.retryAt=Date.now()+30_000;item.error=message;item.lastTriedAt=new Date().toISOString();}
+      if(owner)owner.lastError=message;
+      await persistWorkData();
+      return {status:'identity_lookup_error'};
+    }
+    const wanted=new Set(xingtuIds),matches=new Map();
+    for(const match of lookup.payload.matches){
+      if(!match || !wanted.has(match.xingtu_id) || typeof match.sec_uid!=='string' || !match.sec_uid.trim() || match.sec_uid.length>256 || match.sec_uid.toLowerCase()==='self')continue;
+      matches.set(match.xingtu_id,match.sec_uid);
+    }
+    for(const item of rows){
+      const id=item.payload?.xingtu_id;
+      if(!wanted.has(id) || item.payload.sec_uid)continue;
+      const secUid=matches.get(id);
+      item.payload.rpa_feedback={...item.payload.rpa_feedback,sec_uid_lookup:secUid?'matched':'not_found'};
+      if(secUid){item.payload.sec_uid=secUid;item.payload.rpa_feedback.sec_uid_source='creator_database_xingtu_id';}
+    }
+    await persistWorkData();
+  }
   rows = shrinkRecordsToByteLimit(rows, encode);
   const body = encode(rows);
   if (body.length > MAX_INGEST_BYTES) {
