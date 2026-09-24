@@ -1,0 +1,10 @@
+{
+  "name": "creator-extension-privacy",
+  "account_id": "12d133f3e01405941315e130a6b67833",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-12",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "whislte.cc.cd/extension-privacy*", "zone_name": "whislte.cc.cd" }],
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }]
+}
