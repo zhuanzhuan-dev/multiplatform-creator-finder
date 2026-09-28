@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09162a">
+  <meta name="description" content="快手找号字段与 API 可行性：真实页面样本、身份边界、接口选择和接入方案。">
+  <title>快手找号：字段、API 与接入决策</title>
+  <style>
+    :root {
+      --navy:#09162a; --navy2:#122943; --ink:#152336; --muted:#607186;
+      --paper:#f6f5f1; --white:#fff; --orange:#ff6b35; --orange2:#ffad78;
+      --teal:#08a899; --teal-soft:#d9f3ee; --blue-soft:#e5eef7; --line:#d9e1e7;
+      --shadow:0 26px 75px rgba(0,12,35,.22);
+    }
+    * { box-sizing:border-box; }
+    html { height:100%; }
+    body { height:100%; margin:0; overflow:hidden; color:var(--ink); background:#dbe2e9; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+    button,a { -webkit-tap-highlight-color:transparent; }
+    button { font:inherit; }
+    a { color:inherit; }
+    button:focus-visible,a:focus-visible { outline:3px solid var(--orange); outline-offset:3px; }
+    .app { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:14px 18px; }
+    .deck { position:relative; width:min(calc(100vw - 36px),calc((100vh - 96px) * 16 / 9)); aspect-ratio:16/9; overflow:hidden; border-radius:15px; background:var(--paper); box-shadow:var(--shadow); isolation:isolate; }
+    .deck::before { content:""; position:absolute; inset:0; z-index:0; background:radial-gradient(circle at 96% 2%,rgba(255,107,53,.12),transparent 27%),radial-gradient(circle at 0% 95%,rgba(8,168,153,.08),transparent 30%); pointer-events:none; }
+    .slide { position:absolute; inset:0; z-index:1; display:none; grid-template-rows:auto 1fr auto; padding:clamp(28px,3.6vw,55px) clamp(34px,5vw,82px) clamp(23px,2.4vw,36px); overflow:auto; }
+    .slide.active { display:grid; animation:appear .35s ease-out both; }
+    @keyframes appear { from {opacity:.45; transform:translateY(9px)} to {opacity:1;transform:translateY(0)} }
+    .slide.dark { background:var(--navy); color:#f9fbfd; }
+    .slide.dark::before { content:""; position:absolute; right:-10%; top:-40%; width:70%; aspect-ratio:1; border-radius:50%; border:1px solid rgba(255,255,255,.11); box-shadow:0 0 0 80px rgba(255,255,255,.025),0 0 0 160px rgba(255,255,255,.018); pointer-events:none; }
+    .topline,.footline { position:relative; z-index:1; display:flex; justify-content:space-between; align-items:center; gap:15px; }
+    .topline { color:var(--muted); font-size:clamp(10px,.88vw,13px); font-weight:750; letter-spacing:.14em; text-transform:uppercase; }
+    .dark .topline { color:#9eb0c3; }
+    .topline .brand { display:flex; align-items:center; gap:10px; }
+    .brand-mark { width:17px; height:17px; border-radius:5px; background:var(--orange); transform:rotate(-12deg); box-shadow:7px 0 0 rgba(255,107,53,.27); }
+    .page-tag { border:1px solid currentColor; border-radius:99px; padding:3px 10px; letter-spacing:.05em; }
+    .content { position:relative; z-index:1; min-height:0; display:flex; flex-direction:column; justify-content:center; }
+    .footline { align-self:end; border-top:1px solid var(--line); padding-top:9px; min-height:28px; color:var(--muted); font-size:clamp(9px,.74vw,11px); line-height:1.35; }
+    .dark .footline { border-color:rgba(255,255,255,.15); color:#a5b4c5; }
+    .footline a { color:inherit; text-decoration:underline; text-underline-offset:2px; }
+    .eyebrow { margin:0 0 11px; color:var(--orange); font-size:clamp(11px,1vw,15px); font-weight:800; letter-spacing:.16em; }
+    h1,h2,h3,p { margin-top:0; }
+    h1 { margin-bottom:18px; max-width:900px; font-size:clamp(42px,5.8vw,84px); line-height:1.08; letter-spacing:-.055em; }
+    h2 { margin-bottom:14px; font-size:clamp(30px,3.55vw,52px); line-height:1.14; letter-spacing:-.045em; }
+    h3 { margin-bottom:8px; font-size:clamp(15px,1.5vw,22px); line-height:1.28; }
+    .lead { max-width:920px; font-size:clamp(15px,1.55vw,23px); line-height:1.55; color:var(--muted); }
+    .dark .lead { color:#bdcad8; }
+    .em { color:var(--orange); }
+    .green { color:var(--teal); }
+    .chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:99px; padding:5px 11px; color:var(--muted); background:#fff; font-size:clamp(10px,.87vw,13px); font-weight:700; white-space:nowrap; }
+    .chip.ok { color:#08776c; border-color:#9bded5; background:#e9f8f4; }
+    .chip.warn { color:#ae4924; border-color:#ffd0b6; background:#fff1e8; }
+    .chip.dark-chip { color:#dceaf7; border-color:#526a83; background:#1b314b; }
+    .chip-row { display:flex; flex-wrap:wrap; gap:9px; margin-top:24px; }
+    .hero-line { width:85px; height:8px; border-radius:99px; background:linear-gradient(90deg,var(--orange),var(--orange2)); margin:0 0 25px; }
+    .hero-note { max-width:750px; margin:0; font-size:clamp(14px,1.38vw,20px); color:#bdcad8; line-height:1.58; }
+    .statement { margin:7px 0 20px; max-width:1000px; font-size:clamp(25px,3.1vw,45px); font-weight:850; line-height:1.27; letter-spacing:-.035em; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:clamp(10px,1.3vw,18px); }
+    .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:clamp(12px,1.6vw,23px); }
+    .card { min-width:0; border:1px solid var(--line); border-radius:16px; background:rgba(255,255,255,.86); padding:clamp(15px,1.8vw,27px); }
+    .card.orange { border-color:#ffbb98; background:#fff3ea; }
+    .card.teal { border-color:#a8e2dc; background:#e9f8f5; }
+    .metric { display:block; font-size:clamp(33px,4.4vw,64px); line-height:1; font-weight:850; letter-spacing:-.055em; color:var(--navy2); }
+    .metric-label { display:block; margin:10px 0 5px; font-size:clamp(13px,1.3vw,19px); font-weight:800; }
+    .card p { margin:0; color:var(--muted); font-size:clamp(11px,1.05vw,15px); line-height:1.47; }
+    .bar-note { margin-top:16px; padding:11px 16px; border-left:4px solid var(--orange); background:#fff; font-size:clamp(11px,1.04vw,15px); line-height:1.45; }
+    .tabs { display:flex; flex-wrap:wrap; gap:8px; margin:15px 0; }
+    .tab { border:1px solid var(--line); background:#fff; color:var(--muted); padding:8px 14px; border-radius:9px; cursor:pointer; font-weight:750; font-size:clamp(11px,.98vw,14px); }
+    .tab[aria-selected="true"] { border-color:var(--navy2); background:var(--navy2); color:#fff; }
+    .identity-flow { display:grid; grid-template-columns:1fr auto 1.25fr auto 1fr; gap:10px; align-items:center; margin-top:9px; }
+    .id-box { min-width:0; min-height:130px; border:1px solid var(--line); border-radius:15px; padding:17px; background:#fff; }
+    .id-box.highlight { background:#fff1e9; border-color:#ffbd9b; }
+    .id-label { display:block; color:var(--muted); font-size:clamp(10px,.85vw,13px); font-weight:750; margin-bottom:13px; }
+    .id-value { display:block; font-size:clamp(17px,1.75vw,25px); font-weight:800; line-height:1.25; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+    .id-sub { display:block; margin-top:9px; color:var(--muted); font-size:clamp(10px,.87vw,13px); line-height:1.35; }
+    .arrow { color:var(--orange); font-size:clamp(24px,2.7vw,42px); font-weight:300; }
+    .identity-caption { margin:17px 0 0; font-size:clamp(12px,1.13vw,16px); line-height:1.5; color:var(--muted); }
+    .field-panel { min-height:225px; border:1px solid var(--line); border-radius:16px; background:#fff; padding:clamp(16px,1.6vw,25px); }
+    .field-panel[hidden],.sample-panel[hidden] { display:none; }
+    .field-heading { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
+    .field-heading p { margin:0; font-size:clamp(11px,1vw,15px); color:var(--muted); }
+    .field-list { display:flex; flex-wrap:wrap; gap:8px; margin:17px 0; }
+    .field { padding:7px 10px; border-radius:8px; background:#e9f0f6; color:#1d3e60; font-size:clamp(11px,.98vw,14px); font-weight:700; }
+    .field.critical { background:#ffe8da; color:#9c401e; }
+    .field-caution { margin:0; padding-top:11px; border-top:1px solid var(--line); color:var(--muted); font-size:clamp(11px,1vw,15px); }
+    .api-header { display:flex; justify-content:space-between; align-items:flex-start; gap:15px; }
+    .api-card { border:1px solid var(--line); border-radius:17px; padding:clamp(16px,1.8vw,27px); background:#fff; }
+    .api-card h3 { display:flex; align-items:center; gap:8px; }
+    .api-card ul { padding-left:19px; margin:15px 0 0; color:#42546a; font-size:clamp(11px,1vw,15px); line-height:1.45; }
+    .api-card li { margin:7px 0; }
+    .api-endpoint { display:block; margin:12px 0; padding:10px 13px; border-radius:8px; background:var(--navy); color:#e6f3ff; overflow-wrap:anywhere; font:clamp(11px,1vw,15px)/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .api-card strong { color:var(--ink); }
+    .project-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:11px; margin-top:10px; }
+    .project-btn { min-height:164px; padding:18px; border:1px solid var(--line); border-radius:14px; background:#fff; text-align:left; cursor:pointer; }
+    .project-btn[aria-pressed="true"] { border:2px solid var(--orange); background:#fff3eb; padding:17px; }
+    .project-btn strong { display:block; font-size:clamp(14px,1.32vw,19px); margin-bottom:8px; }
+    .project-btn span { color:var(--muted); font-size:clamp(11px,.96vw,14px); line-height:1.42; }
+    .project-detail { min-height:100px; margin-top:14px; padding:15px 18px; background:#10283f; border-radius:13px; color:#e8f3fb; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+    .project-detail p { margin:6px 0 0; color:#bdd0de; font-size:clamp(11px,.96vw,14px); line-height:1.43; }
+    .project-detail a { color:#ffd1b8; }
+    .flow4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin:20px 0; }
+    .step { position:relative; min-height:160px; padding:18px; border:1px solid var(--line); border-radius:15px; background:#fff; }
+    .step:not(:last-child)::after { content:"→"; position:absolute; right:-17px; top:44%; z-index:2; color:var(--orange); font-size:27px; }
+    .step-num { display:inline-flex; width:25px; height:25px; align-items:center; justify-content:center; background:#fbe2d5; color:#b64b25; border-radius:8px; font-size:12px; font-weight:800; margin-bottom:12px; }
+    .step p { margin:0; color:var(--muted); font-size:clamp(11px,.93vw,14px); line-height:1.43; }
+    .scenario { margin-top:8px; display:flex; align-items:center; flex-wrap:wrap; gap:9px; }
+    .scenario button { border:1px solid var(--line); border-radius:8px; padding:7px 12px; background:#fff; cursor:pointer; font-size:clamp(11px,.95vw,14px); font-weight:700; }
+    .scenario button[aria-pressed="true"] { background:var(--navy); color:#fff; border-color:var(--navy); }
+    .scenario-result { margin:11px 0 0; padding:12px 16px; border-radius:9px; background:#e9f8f5; color:#075e56; font-weight:750; font-size:clamp(12px,1.07vw,16px); }
+    .scenario-result.blocked { color:#a14924; background:#fff0e6; }
+    .status-list { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:18px; }
+    .status-card { border-radius:14px; background:#fff; border:1px solid var(--line); padding:17px; }
+    .status-card b { display:block; font-size:clamp(13px,1.15vw,17px); margin:7px 0; }
+    .status-card p { margin:0; color:var(--muted); font-size:clamp(11px,.97vw,14px); line-height:1.45; }
+    .next-list { display:grid; grid-template-columns:1fr 1fr; gap:13px; margin-top:17px; }
+    .next-item { display:flex; gap:14px; border:1px solid rgba(255,255,255,.15); border-radius:14px; padding:16px; background:rgba(255,255,255,.055); }
+    .next-item .n { color:var(--orange2); font-size:24px; font-weight:850; }
+    .next-item b { display:block; font-size:clamp(13px,1.16vw,18px); margin-bottom:5px; }
+    .next-item p { margin:0; color:#adbfce; font-size:clamp(11px,.96vw,14px); line-height:1.45; }
+    .source-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; margin-top:15px; }
+    .source-link { display:block; border:1px solid var(--line); border-radius:12px; background:#fff; padding:13px 16px; text-decoration:none; }
+    .source-link:hover { border-color:var(--orange); }
+    .source-link b { display:block; color:var(--navy2); font-size:clamp(12px,1.06vw,16px); }
+    .source-link small { display:block; margin-top:4px; color:var(--muted); font-size:clamp(10px,.82vw,12px); line-height:1.35; overflow-wrap:anywhere; }
+    .controls { width:min(calc(100vw - 36px),calc((100vh - 96px) * 16 / 9)); display:flex; align-items:center; justify-content:space-between; gap:12px; color:#324257; font-size:13px; }
+    .control-group { display:flex; align-items:center; gap:6px; }
+    .control { border:1px solid #b8c5d1; background:#f6f8fa; border-radius:9px; padding:8px 13px; cursor:pointer; color:#23354b; font-weight:700; }
+    .control:hover:not(:disabled) { background:#fff; border-color:#748da5; }
+    .control:disabled { opacity:.38; cursor:default; }
+    .progress-track { height:4px; width:clamp(90px,12vw,190px); background:#b8c6d1; border-radius:99px; overflow:hidden; }
+    .progress-fill { height:100%; width:10%; background:var(--orange); transition:width .25s; }
+    .counter { min-width:45px; text-align:center; font-variant-numeric:tabular-nums; font-weight:800; }
+    .overview { position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(5,15,30,.72); }
+    .overview.open { display:flex; }
+    .overview-box { width:min(820px,100%); max-height:min(720px,90vh); overflow:auto; border-radius:17px; padding:24px; background:#fff; box-shadow:var(--shadow); }
+    .overview-head { display:flex; justify-content:space-between; align-items:center; gap:15px; }
+    .overview-head h2 { font-size:25px; margin:0; }
+    .overview-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:9px; margin-top:18px; }
+    .overview-grid button { text-align:left; cursor:pointer; border:1px solid var(--line); border-radius:10px; padding:13px 15px; color:var(--ink); background:#f8fafb; font-weight:700; }
+    .overview-grid button:hover { border-color:var(--orange); background:#fff4ee; }
+    .overview-grid span { display:block; margin-bottom:4px; color:var(--orange); font-size:11px; }
+    @media (max-width:900px) {
+      .app { padding:0; gap:0; }
+      .deck { width:100vw; height:calc(100dvh - 67px); aspect-ratio:auto; border-radius:0; }
+      .slide { padding:24px 22px 20px; }
+      .controls { width:100%; min-height:67px; padding:0 12px; background:#e6ebf0; }
+      .grid3,.status-list { grid-template-columns:1fr; }
+      .project-grid { grid-template-columns:repeat(2,1fr); }
+      .flow4 { grid-template-columns:repeat(2,1fr); }
+      .step:not(:last-child)::after { display:none; }
+      .source-grid { grid-template-columns:1fr; }
+      h1 { font-size:clamp(40px,9vw,68px); }
+      h2 { font-size:clamp(27px,6vw,42px); }
+      .identity-flow { grid-template-columns:1fr; }
+      .arrow { transform:rotate(90deg); justify-self:center; line-height:.65; }
+      .id-box { min-height:0; }
+      .content { justify-content:flex-start; padding-top:20px; }
+      .slide:first-child .content { justify-content:center; padding-top:0; }
+      .footline { margin-top:20px; }
+    }
+    @media (max-width:520px) {
+      .grid2,.project-detail,.next-list,.overview-grid { grid-template-columns:1fr; }
+      .flow4 { grid-template-columns:1fr; }
+      .project-grid { grid-template-columns:1fr 1fr; }
+      .project-btn { min-height:125px; padding:12px; }
+      .project-btn[aria-pressed="true"] { padding:11px; }
+      .topline { letter-spacing:.08em; }
+      .controls .hide-mobile { display:none; }
+      .progress-track { width:82px; }
+    }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; transition-duration:.01ms!important; scroll-behavior:auto!important; } }
+    @media print {
+      @page { size:landscape; margin:0; }
+      html,body { height:auto; overflow:visible; background:#fff; print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+      .app { display:block; padding:0; }
+      .deck { width:100%; height:auto; aspect-ratio:auto; overflow:visible; border-radius:0; box-shadow:none; }
+      .slide,.slide.active { position:relative; display:grid; width:100vw; height:56.25vw; min-height:0; break-after:page; page-break-after:always; overflow:hidden; animation:none; }
+      .controls,.overview { display:none!important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <main class="deck" id="deck" aria-label="快手字段与 API 调研演示">
+      <section class="slide dark active" data-title="结论先看" aria-hidden="false">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>CREATOR DISCOVERY / 快手专项</span><span class="page-tag">01 / 09</span></header>
+        <div class="content">
+          <div class="hero-line"></div>
+          <p class="eyebrow">字段与 API 可行性 · 2026.09</p>
+          <h1>快手号能拿到。<br><span class="em">主页 ID 要分开存。</span></h1>
+          <p class="hero-note">已登录浏览器的真实主页可见“快手号”；官方公开用户信息接口未列出这个字段。当前可行路径是推荐流进入主页，在页面上读取有标签的快手号。</p>
+          <div class="chip-row"><span class="chip dark-chip">2 个公开主页实测</span><span class="chip dark-chip">官方 API + 公开源码对照</span><span class="chip dark-chip">本地插件改动已测试</span></div>
+        </div>
+        <footer class="footline"><span>研究证据日期：2026-09-24 · 演示制作：2026-09-28</span><span>方向键 / 空格翻页 · 目录可跳转</span></footer>
+      </section>
+
+      <section class="slide" data-title="关键结论" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>01 / 关键结论</span><span class="page-tag">02 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">直接回答</p>
+          <h2>有页面路径，也有快手号。<br>两者承担不同任务。</h2>
+          <div class="grid3">
+            <div class="card teal"><strong class="metric">2 / 2</strong><span class="metric-label">主页显示快手号</span><p>两例已登录公开主页均读到带标签的快手号与规范主页 URL。</p></div>
+            <div class="card"><strong class="metric">1 / 1</strong><span class="metric-label">推荐视频可进入主页</span><p>当前视频的作者链接、视频 ID、时长和互动数均能读取。</p></div>
+            <div class="card orange"><strong class="metric">0</strong><span class="metric-label">官方接口列出的快手号字段</span><p>公开 GetUserInfo 文档列出基础资料，没有快手号或主页 URL。</p></div>
+          </div>
+          <div class="bar-note"><b>口径：</b>2/2 与 1/1 是定向页面样本，只证明这条采集路径当前可用；正式采集后还需统计覆盖率。</div>
+        </div>
+        <footer class="footline"><span>来源：2026-09-24 已登录 Chrome 只读观察</span><a href="https://open.kuaishou.com/platformDocs/openAbility/userInformation/publicInformation" target="_blank" rel="noopener noreferrer">快手官方用户信息接口 ↗</a></footer>
+      </section>
+
+      <section class="slide" data-title="身份拆分" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>02 / 身份拆分</span><span class="page-tag">03 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">点击切换真实样本</p>
+          <h2>同一个达人，两个不同的值。</h2>
+          <div class="tabs" role="tablist" aria-label="公开主页样本">
+            <button class="tab sample-tab" role="tab" aria-selected="true" data-sample="a">样本 A · 一中大侠</button>
+            <button class="tab sample-tab" role="tab" aria-selected="false" data-sample="b">样本 B · 优酷这是我的西游</button>
+          </div>
+          <div class="identity-flow" aria-live="polite">
+            <div class="id-box"><span class="id-label">推荐卡作者链接</span><strong class="id-value" id="sample-name">@一中大侠</strong><small class="id-sub">从当前视频进入主页</small></div>
+            <span class="arrow" aria-hidden="true">→</span>
+            <div class="id-box"><span class="id-label">主页路径 ID · profile_path_id</span><strong class="id-value" id="sample-path">3x6cvhyfmvk6x79</strong><small class="id-sub" id="sample-followers">粉丝：116.4 万</small></div>
+            <span class="arrow" aria-hidden="true">≠</span>
+            <div class="id-box highlight"><span class="id-label">页面标注的快手号</span><strong class="id-value" id="sample-handle">4468565578</strong><small class="id-sub">下游请求需要此值</small></div>
+          </div>
+          <p class="identity-caption">规范主页：<a id="sample-link" href="https://www.kuaishou.com/profile/3x6cvhyfmvk6x79" target="_blank" rel="noopener noreferrer">https://www.kuaishou.com/profile/3x6cvhyfmvk6x79 ↗</a></p>
+        </div>
+        <footer class="footline"><span>网页实测；主页 ID、快手号、GraphQL user_id、open_id 分栏保存</span><a href="https://open.kuaishou.com/docs/develop/functionAccessGuide/businessAccount/skip" target="_blank" rel="noopener noreferrer">官方 ID 区分 ↗</a></footer>
+      </section>
+
+      <section class="slide" data-title="字段来源" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>03 / 字段来源</span><span class="page-tag">04 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">点击来源查看字段</p>
+          <h2>哪些字段能拿到？<br>先看它来自哪一层。</h2>
+          <div class="tabs" role="tablist" aria-label="字段来源">
+            <button class="tab field-tab" role="tab" aria-selected="true" data-field="feed">推荐流卡片</button>
+            <button class="tab field-tab" role="tab" aria-selected="false" data-field="profile">已登录主页</button>
+            <button class="tab field-tab" role="tab" aria-selected="false" data-field="official">官方 OAuth API</button>
+            <button class="tab field-tab" role="tab" aria-selected="false" data-field="private">网页私有 GraphQL</button>
+          </div>
+          <div class="field-panel" id="field-panel" aria-live="polite">
+            <div class="field-heading"><div><h3 id="field-title">推荐流卡片</h3><p id="field-desc">当前视频的页面 DOM；用于发现候选和定位作者主页。</p></div><span class="chip ok" id="field-status">真实页面已核验</span></div>
+            <div class="field-list" id="field-list"><span class="field critical">主页路径 ID</span><span class="field critical">作者主页链接</span><span class="field">作者昵称</span><span class="field">视频 ID</span><span class="field">文案 / 话题</span><span class="field">时长</span><span class="field">点赞 / 评论 / 收藏</span><span class="field">头像 / 封面</span></div>
+            <p class="field-caution" id="field-caution">推荐卡片不直接提供已核验的快手号；需要进入主页读取带标签字段。</p>
+          </div>
+        </div>
+        <footer class="footline"><span>字段空值保持缺失；“可见作品 20 条”不是账号作品总量</span><span>样本范围：2026-09-24</span></footer>
+      </section>
+
+      <section class="slide" data-title="API 判断" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>04 / API 判断</span><span class="page-tag">05 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">接口边界</p>
+          <h2>官方 API 能读授权用户资料，<br>当前解决不了任意达人快手号。</h2>
+          <div class="grid2">
+            <div class="api-card"><span class="chip ok">官方开放平台</span><h3 style="margin-top:14px">GetUserInfo</h3><code class="api-endpoint">GET https://open.kuaishou.com/openapi/user_info</code><ul><li>前提：应用注册与用户授权 <strong>user_info</strong>。</li><li>文档字段：name、sex、fan、follow、head、bigHead、city。</li><li><strong>文档未列：</strong>快手号、主页 URL。</li></ul></div>
+            <div class="api-card"><span class="chip warn">登录态网站接口</span><h3 style="margin-top:14px">网页 GraphQL / 私有响应</h3><code class="api-endpoint">https://www.kuaishou.com/graphql</code><ul><li>公开项目利用浏览器登录态和网站内部查询。</li><li>可参考 user_id、昵称、头像、简介、计数和作品分页。</li><li>字段与接口随网页变化；当前公开查询样例没有快手号。</li></ul></div>
+          </div>
+        </div>
+        <footer class="footline"><a href="https://open.kuaishou.com/platformDocs/openAbility/userInformation/publicInformation" target="_blank" rel="noopener noreferrer">官方用户信息 API ↗</a><a href="https://github.com/ShilongLee/Crawler/blob/main/docs/api/kuaishou/kuaishou.md" target="_blank" rel="noopener noreferrer">Crawler 快手接口实现 ↗</a></footer>
+      </section>
+
+      <section class="slide" data-title="类似项目" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>05 / 公开项目</span><span class="page-tag">06 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">点击项目查看可借鉴点与缺口</p>
+          <h2>成熟项目可借方法，<br>无法替我们证明“快手号稳定返回”。</h2>
+          <div class="project-grid" role="group" aria-label="类似项目">
+            <button class="project-btn" data-project="rsshub" aria-pressed="true"><strong>RSSHub</strong><span>响应拦截 · 主页作品</span></button>
+            <button class="project-btn" data-project="crawler" aria-pressed="false"><strong>Crawler</strong><span>Cookie · GraphQL · 分页</span></button>
+            <button class="project-btn" data-project="forgerss" aria-pressed="false"><strong>ForgeRSS</strong><span>登录浏览器 · CDP</span></button>
+            <button class="project-btn" data-project="biligate" aria-pressed="false"><strong>Bilibili-Gate</strong><span>推荐流过滤交互基线</span></button>
+          </div>
+          <div class="project-detail" id="project-detail" aria-live="polite"><div><b>可借鉴</b><p id="project-good">Playwright 等待页面与拦截响应，可用于观察网页加载时序。</p></div><div><b>当前缺口</b><p id="project-gap">输入使用 principalId；源码没有快手号提取，也没有推荐流业务请求链。</p><a id="project-link" href="https://github.com/DIYgod/RSSHub" target="_blank" rel="noopener noreferrer">查看项目 ↗</a></div></div>
+        </div>
+        <footer class="footline"><span>GitHub 源码快照：2026-09-24；维护活跃不等于接口稳定</span><span>另有历史 SDK，更新较旧，见详细报告</span></footer>
+      </section>
+
+      <section class="slide" data-title="接入链路" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>06 / 接入链路</span><span class="page-tag">07 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">点击身份场景查看下游行为</p>
+          <h2>让快手号进入上传记录，<br>由下游身份闸门决定请求。</h2>
+          <div class="flow4">
+            <div class="step"><span class="step-num">01</span><h3>推荐卡</h3><p>取作者链接、主页路径 ID 与视频事实。</p></div>
+            <div class="step"><span class="step-num">02</span><h3>进入主页</h3><p>仅视频规则明确淘汰时跳过；通过或待复核时读取 .uid 的“快手号”及粉丝、简介、可见作品。</p></div>
+            <div class="step"><span class="step-num">03</span><h3>写观测</h3><p>主页 ID → kuaishou_user_id；快手号 → kuaishou_id；链接 → author_href。</p></div>
+            <div class="step"><span class="step-num">04</span><h3>发下游请求</h3><p>工作台拿到快手号和主页 URL 后查询绑定与发起业务请求。</p></div>
+          </div>
+          <div class="scenario"><b>身份场景：</b><button type="button" data-scenario="complete" aria-pressed="true">快手号 + 主页齐全</button><button type="button" data-scenario="missing" aria-pressed="false">只有主页 ID</button></div>
+          <p class="scenario-result" id="scenario-result" aria-live="polite">满足下游请求条件：使用快手号与主页 URL；主页路径 ID 保留为另一身份字段。</p>
+        </div>
+        <footer class="footline"><span>缺失值保持缺失，观测可留存；不得把路径 ID 当快手号</span><span>本地代码：background.js · kuaishou-page.js</span></footer>
+      </section>
+
+      <section class="slide" data-title="当前进度" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>07 / 实施与验证</span><span class="page-tag">08 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">把完成层级说清楚</p>
+          <h2>页面字段已核验，<br>插件改动已构建，线上链路待验收。</h2>
+          <div class="status-list">
+            <div class="status-card"><span class="chip ok">已验证 · 网页</span><b>2 个主页 + 1 条推荐视频</b><p>主页路径与快手号不同；主页、快手号、粉丝、头像、前 20 条可见作品均读到。简介 1/2。</p></div>
+            <div class="status-card"><span class="chip ok">已验证 · 本地</span><b>372 / 372 测试通过</b><p>字段解析、部分加载等待、身份校验和规范 URL；typecheck、build、dist 检查通过。</p></div>
+            <div class="status-card"><span class="chip warn">待验证 · 实际运行</span><b>本次构建未做实机验收</b><p>仍需核对正式采集上传、候选入池与下游绑定结果。本次没有 SQL 变更。</p></div>
+          </div>
+          <div class="bar-note"><b>验收数据：</b>正式运行应记录 profile_path_id、profile_url、kuaishou_number、profile_read_success 的非空覆盖率，并核对上传与业务结果。</div>
+        </div>
+        <footer class="footline"><span>工作树：multiplatform-creator-finder · 本地代码状态</span><span>测试结果不代替生产验收</span></footer>
+      </section>
+
+      <section class="slide dark" data-title="决策与来源" aria-hidden="true">
+        <header class="topline"><span class="brand"><span class="brand-mark"></span>08 / 决策与来源</span><span class="page-tag">09 / 09</span></header>
+        <div class="content">
+          <p class="eyebrow">建议采用</p>
+          <h2>先用已验证的主页 DOM 路径。<br><span class="em">用真实运行数据决定下一步。</span></h2>
+          <div class="next-list">
+            <div class="next-item"><span class="n">1</span><div><b>发布新插件后跑一轮小样本</b><p>核对快手号与主页 URL 的上传值、候选入池和下游绑定请求结果。</p></div></div>
+            <div class="next-item"><span class="n">2</span><div><b>按字段覆盖率复盘</b><p>统计缺失原因。只有页面路径明显不足时，再评估官方授权接口或网页私有查询。</p></div></div>
+          </div>
+          <div class="chip-row"><a class="chip dark-chip" href="https://open.kuaishou.com/platformDocs/openAbility/userInformation/publicInformation" target="_blank" rel="noopener noreferrer">官方用户信息 API ↗</a><a class="chip dark-chip" href="https://github.com/ShilongLee/Crawler" target="_blank" rel="noopener noreferrer">Crawler ↗</a><a class="chip dark-chip" href="https://github.com/DIYgod/RSSHub" target="_blank" rel="noopener noreferrer">RSSHub ↗</a><a class="chip dark-chip" href="https://github.com/tmwgsicp/ForgeRSS" target="_blank" rel="noopener noreferrer">ForgeRSS ↗</a></div>
+        </div>
+        <footer class="footline"><span>资料与完整字段表：同目录 Markdown 调研报告</span><span>点击来源可打开原始页面</span></footer>
+      </section>
+    </main>
+
+    <nav class="controls" aria-label="演示导航">
+      <div class="control-group"><button class="control" id="menu-button" type="button" aria-haspopup="dialog" aria-expanded="false">☷ 目录</button><button class="control hide-mobile" id="fullscreen-button" type="button">⛶ 全屏</button></div>
+      <div class="control-group"><div class="progress-track" role="progressbar" id="progress-track" aria-valuemin="1" aria-valuemax="9" aria-valuenow="1" aria-label="演示进度"><div class="progress-fill" id="progress-fill"></div></div><span class="counter" id="counter">01 / 09</span></div>
+      <div class="control-group"><button class="control" id="previous" type="button" aria-label="上一页">←</button><button class="control" id="next" type="button" aria-label="下一页">→</button></div>
+    </nav>
+  </div>
+
+  <div class="overview" id="overview" role="dialog" aria-modal="true" aria-label="演示目录" aria-hidden="true">
+    <div class="overview-box">
+      <div class="overview-head"><h2>演示目录</h2><button class="control" id="close-overview" type="button" aria-label="关闭目录">✕ 关闭</button></div>
+      <div class="overview-grid" id="overview-grid"></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+      var slides = Array.from(document.querySelectorAll(".slide"));
+      var current = 0;
+      var overview = document.getElementById("overview");
+      var menuButton = document.getElementById("menu-button");
+      var grid = document.getElementById("overview-grid");
+      slides.forEach(function (slide, index) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = "<span>" + String(index + 1).padStart(2,"0") + "</span>" + slide.dataset.title;
+        button.addEventListener("click", function () { show(index); closeOverview(); });
+        grid.appendChild(button);
+      });
+      function show(index) {
+        current = Math.max(0, Math.min(slides.length - 1, index));
+        slides.forEach(function (slide, i) {
+          slide.classList.toggle("active", i === current);
+          slide.setAttribute("aria-hidden", i === current ? "false" : "true");
+          if (i === current) slide.scrollTop = 0;
+        });
+        var n = current + 1;
+        document.getElementById("counter").textContent = String(n).padStart(2,"0") + " / " + String(slides.length).padStart(2,"0");
+        document.getElementById("progress-fill").style.width = (n / slides.length * 100) + "%";
+        document.getElementById("progress-track").setAttribute("aria-valuenow", String(n));
+        document.getElementById("previous").disabled = current === 0;
+        document.getElementById("next").disabled = current === slides.length - 1;
+        history.replaceState(null, "", "#slide-" + n);
+      }
+      function openOverview() {
+        overview.classList.add("open"); overview.setAttribute("aria-hidden","false");
+        menuButton.setAttribute("aria-expanded","true"); document.getElementById("close-overview").focus();
+      }
+      function closeOverview() {
+        overview.classList.remove("open"); overview.setAttribute("aria-hidden","true");
+        menuButton.setAttribute("aria-expanded","false"); menuButton.focus();
+      }
+      document.getElementById("previous").addEventListener("click", function () { show(current - 1); });
+      document.getElementById("next").addEventListener("click", function () { show(current + 1); });
+      menuButton.addEventListener("click", openOverview);
+      document.getElementById("close-overview").addEventListener("click", closeOverview);
+      overview.addEventListener("click", function (event) { if (event.target === overview) closeOverview(); });
+      document.getElementById("fullscreen-button").addEventListener("click", function () {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (overview.classList.contains("open")) { if (event.key === "Escape") closeOverview(); return; }
+        if (event.key === " " && event.target.closest("button,a,[role=tab]")) return;
+        if (["ArrowRight","PageDown"," "].includes(event.key)) { event.preventDefault(); show(current + 1); }
+        else if (["ArrowLeft","PageUp"].includes(event.key)) { event.preventDefault(); show(current - 1); }
+        else if (event.key === "Home") { event.preventDefault(); show(0); }
+        else if (event.key === "End") { event.preventDefault(); show(slides.length - 1); }
+      });
+      window.addEventListener("hashchange", function () {
+        var match = location.hash.match(/^#slide-(\d+)$/);
+        if (match) show(Number(match[1]) - 1);
+      });
+
+      var samples = {
+        a:{name:"@一中大侠",path:"3x6cvhyfmvk6x79",handle:"4468565578",followers:"116.4 万"},
+        b:{name:"优酷这是我的西游",path:"3xt6e7xavy9vxra",handle:"3913621640",followers:"39.1 万"}
+      };
+      document.querySelectorAll(".sample-tab").forEach(function (button) {
+        button.addEventListener("click", function () {
+          document.querySelectorAll(".sample-tab").forEach(function (item) { item.setAttribute("aria-selected", item === button ? "true" : "false"); });
+          var value = samples[button.dataset.sample];
+          document.getElementById("sample-name").textContent = value.name;
+          document.getElementById("sample-path").textContent = value.path;
+          document.getElementById("sample-handle").textContent = value.handle;
+          document.getElementById("sample-followers").textContent = "粉丝：" + value.followers;
+          var link = document.getElementById("sample-link");
+          link.href = "https://www.kuaishou.com/profile/" + value.path;
+          link.textContent = link.href + " ↗";
+        });
+      });
+
+      var fields = {
+        feed:{title:"推荐流卡片",desc:"当前视频的页面 DOM；用于发现候选和定位作者主页。",status:"真实页面已核验",ok:true,list:["主页路径 ID","作者主页链接","作者昵称","视频 ID","文案 / 话题","时长","点赞 / 评论 / 收藏","头像 / 封面"],critical:[0,1],caution:"推荐卡片不直接提供已核验的快手号；需要进入主页读取带标签字段。"},
+        profile:{title:"已登录主页",desc:"资料页 DOM；读取当前页面可见信息。",status:"2 个公开主页实测",ok:true,list:["快手号（有标签时）","规范主页 URL","昵称","粉丝数","头像","简介（可能为空）","前 20 条可见作品及点赞"],critical:[0,1],caution:"两例主页均有快手号，简介为 1/2；可见作品不等于完整作品列表。"},
+        official:{title:"官方 OAuth 用户信息",desc:"GetUserInfo 读取已经授权的用户，不支持任意达人发现。",status:"官方文档",ok:false,list:["name","sex","fan","follow","head","bigHead","city"],critical:[],caution:"官方文档未列快手号和主页 URL；使用前需要应用与 user_info 授权。"},
+        private:{title:"网页私有 GraphQL",desc:"公开项目在登录浏览器中查询网页内部接口。",status:"公开源码",ok:false,list:["user_id","user_name","头像","简介","粉丝 / 关注 / 作品计数","作品分页"],critical:[],caution:"字段随网页变化；公开查询样例未提供可直接填充的快手号字段。"}
+      };
+      document.querySelectorAll(".field-tab").forEach(function (button) {
+        button.addEventListener("click", function () {
+          document.querySelectorAll(".field-tab").forEach(function (item) { item.setAttribute("aria-selected", item === button ? "true" : "false"); });
+          var value = fields[button.dataset.field];
+          document.getElementById("field-title").textContent = value.title;
+          document.getElementById("field-desc").textContent = value.desc;
+          var status = document.getElementById("field-status");
+          status.textContent = value.status; status.className = value.ok ? "chip ok" : "chip warn";
+          var list = document.getElementById("field-list");
+          list.replaceChildren();
+          value.list.forEach(function (text, index) {
+            var span = document.createElement("span");
+            span.className = value.critical.includes(index) ? "field critical" : "field";
+            span.textContent = text; list.appendChild(span);
+          });
+          document.getElementById("field-caution").textContent = value.caution;
+        });
+      });
+
+      var projects = {
+        rsshub:{good:"Playwright 等待页面与拦截响应，可用于观察网页加载时序。",gap:"输入使用 principalId；源码没有快手号提取，也没有推荐流业务请求链。",url:"https://github.com/DIYgod/RSSHub"},
+        crawler:{good:"GraphQL 资料与作品分页拆分清楚，能参考字段和任务封装。",gap:"依赖 Cookie 和私有接口；公开 profile 查询没有 kwaiId / 快手号。",url:"https://github.com/ShilongLee/Crawler"},
+        forgerss:{good:"登录浏览器、CDP 和主页链接归一化流程可参考。",gap:"核心是作品 RSS；没有快手号与下游绑定链路。",url:"https://github.com/tmwgsicp/ForgeRSS"},
+        biligate:{good:"浏览器内推荐流过滤、用户操作与反馈方式可参考。",gap:"项目面向 B 站，不能作为快手 API 或字段可得性证据。",url:"https://github.com/magicdawn/Bilibili-Gate"}
+      };
+      document.querySelectorAll(".project-btn").forEach(function (button) {
+        button.addEventListener("click", function () {
+          document.querySelectorAll(".project-btn").forEach(function (item) { item.setAttribute("aria-pressed", item === button ? "true" : "false"); });
+          var value = projects[button.dataset.project];
+          document.getElementById("project-good").textContent = value.good;
+          document.getElementById("project-gap").textContent = value.gap;
+          document.getElementById("project-link").href = value.url;
+        });
+      });
+      document.querySelectorAll("[data-scenario]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          document.querySelectorAll("[data-scenario]").forEach(function (item) { item.setAttribute("aria-pressed", item === button ? "true" : "false"); });
+          var result = document.getElementById("scenario-result");
+          var complete = button.dataset.scenario === "complete";
+          result.classList.toggle("blocked", !complete);
+          result.textContent = complete
+            ? "满足下游请求条件：使用快手号与主页 URL；主页路径 ID 保留为另一身份字段。"
+            : "保留原始观测并等待补采或人工确认；下游绑定请求缺少快手号，不能用主页 ID 代替。";
+        });
+      });
+      var initial = location.hash.match(/^#slide-(\d+)$/);
+      show(initial ? Number(initial[1]) - 1 : 0);
+    }());
+  </script>
+</body>
+</html>

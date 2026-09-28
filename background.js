@@ -157,7 +157,8 @@ const kuaishou = createKuaishouRuntime({
       action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons}});
     payload.comment_count=observation.comments ?? null;payload.favorite_count=observation.favorites ?? null;
     Object.assign(payload.rpa_feedback,{source:'kuaishou-recommend',account_platform:'kuaishou',kuaishou_user_id:observation.authorId,
-      kuaishou_id:profile?.kuaishouId || '',no_profile_navigation:false,review_required:Boolean(decision.needsReview)});
+      kuaishou_id:profile?.kuaishouId || '',kuaishou_handle_source:profile?.kuaishouId?'profile_uid_text':null,
+      kuaishou_profile_read:Boolean(profile),no_profile_navigation:false,review_required:Boolean(decision.needsReview)});
     addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner});
     await persistWorkData();
   }
