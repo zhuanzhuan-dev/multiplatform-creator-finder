@@ -15,6 +15,7 @@ import { accountProfile } from "./lib/account-profile.js";
 import { launcherState, toolbarState, aggregateTaskState } from "./lib/launcher-state.js";
 import { contentSkipDecision } from "./lib/content-type.js";
 import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
+import { loadOutbox, writeOutboxChanges } from "./lib/outbox-store.js";
 import {
   CLOUD_DESTINATION,
   MAX_INGEST_BYTES,
@@ -54,6 +55,8 @@ const attachedDebuggerTabs = new Set();
 const panelPorts = new Map();
 const cloudClient = createCloudClient();
 const MAX_UPLOAD_ATTEMPTS = 8;
+const MAX_UPLOAD_BATCHES = 5;
+const MAX_UPLOAD_WORK_MS = 5_000;
 
 let initialized = null;
 const pendingPanelSelections = new Map();
@@ -105,6 +108,9 @@ let configQueue = Promise.resolve();
 let seenVideos = [];
 let creatorIndex = {};
 let outbox = [];
+const outboxWrites = new Map();
+const outboxDeletes = new Map();
+let outboxRevision = 0;
 let workDataWrites = Promise.resolve();
 let browseState = {enabled:true, count:0, lastError:""};
 let xingtuBrowseState = {enabled:true, count:0, lastError:""};
@@ -114,6 +120,7 @@ let dailyStats = null;
 let pendingDecisions = [];
 let historyWrites = Promise.resolve();
 let flushInFlight = null;
+let uploadDrainInFlight = null;
 let uploadScheduling = Promise.resolve();
 let cloudAuth = null;
 let pairing = null;
@@ -183,6 +190,7 @@ function createBilibiliSurfaceRuntime(surface, config) {
     settings:()=>config().settings,rules:()=>config().rules,authorize:checkCloudConnection,
     ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
     persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
+    persistProgress:()=>persistTaskProgress((surface === 'popular' ? bilibiliPopular : bilibili).progressStorage()),
     recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
     collect:collectBilibili
   }, {surface});
@@ -216,7 +224,35 @@ function reserveQueue(count) {
   // The collection journal stays durable even if uploads are slower than collection.
   // Only old settled entries are disposable; the uploader applies its own staging cap.
   let excess=Math.max(0,outbox.length+count-MAX_OUTBOX);
-  outbox=outbox.filter(item=>{if(excess && settled.has(item.status)){excess--;return false;}return true;});
+  const discarded = [];
+  for (const item of outbox) if (excess && settled.has(item.status)) { excess--; discarded.push(item.id); }
+  removeOutbox(discarded);
+}
+
+function touchOutbox(...items) {
+  for (const item of items) {
+    if (!outbox.includes(item)) continue;
+    outboxDeletes.delete(item.id);
+    outboxWrites.set(item.id, {item, revision:++outboxRevision});
+  }
+}
+
+function removeOutbox(ids) {
+  if (!ids.length) return;
+  const removed = new Set(ids);
+  outbox = outbox.filter(item => !removed.has(item.id));
+  for (const id of removed) {
+    outboxWrites.delete(id);
+    outboxDeletes.set(id, ++outboxRevision);
+  }
+}
+
+async function persistOutboxChanges() {
+  const writes = [...outboxWrites], deletes = [...outboxDeletes];
+  await writeOutboxChanges(writes.map(([, value]) => structuredClone(value.item)), deletes.map(([id]) => id));
+  // Changes arriving during IndexedDB work belong to the next write, even for the same ID.
+  for (const [id, value] of writes) if (outboxWrites.get(id)?.revision === value.revision) outboxWrites.delete(id);
+  for (const [id, revision] of deletes) if (outboxDeletes.get(id) === revision) outboxDeletes.delete(id);
 }
 function aggregateState() { return aggregateTaskState([state,kuaishou.state(),bilibili.state(),bilibiliPopular.state(),feigua.state(),xingtu.state()]); }
 function syncPower() {
@@ -266,7 +302,7 @@ function isRecommendationFeedUrl(value) {
 async function initialize() {
   if (initialized) return initialized;
   initialized = (async () => {
-    const saved = splitLegacyBilibiliStorage(await chrome.storage.local.get([...Object.values(STORAGE_KEYS),CREATOR_UPLOAD_BACKFILL_KEY,"draFeiguaBrowsing","draXingtuBrowsing","draXingtuConfig","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliConfig","draBilibiliPopular","draBilibiliPopularConfig"]));
+    const saved = splitLegacyBilibiliStorage(await chrome.storage.local.get([...Object.values(STORAGE_KEYS),CREATOR_UPLOAD_BACKFILL_KEY,"draFeiguaBrowsing","draXingtuBrowsing","draXingtuConfig","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliState","draBilibiliConfig","draBilibiliPopular","draBilibiliPopularState","draBilibiliPopularConfig"]));
     browseState={...browseState,...saved.draFeiguaBrowsing};
     xingtuBrowseState={...xingtuBrowseState,...saved.draXingtuBrowsing};
     const savedRules = saved[STORAGE_KEYS.rules] || {};
@@ -287,15 +323,15 @@ async function initialize() {
     await chrome.storage.local.set({draKuaishouConfig:kuaishouConfig});
     const previousBilibili = saved.draBilibiliConfig;
     bilibiliConfig = {
-      settings:bilibiliSettingsFrom(previousBilibili, saved.draBilibili?.state?.runSettings || settings),
-      rules:mergeBilibiliRules(previousBilibili?.rules || saved.draBilibili?.state?.runRules || {}),
+      settings:bilibiliSettingsFrom(previousBilibili, saved.draBilibiliState?.runSettings || settings),
+      rules:mergeBilibiliRules(previousBilibili?.rules || saved.draBilibiliState?.runRules || {}),
       settingsDraft:previousBilibili?.settingsDraft || null,
       scheduleOptIn:previousBilibili?.scheduleOptIn === true
     };
     const previousPopular = saved.draBilibiliPopularConfig;
     bilibiliPopularConfig = {
       settings:bilibiliSettingsFrom(previousPopular, bilibiliConfig.settings),
-      rules:mergeBilibiliRules(previousPopular?.rules || saved.draBilibiliPopular?.state?.runRules || bilibiliConfig.rules),
+      rules:mergeBilibiliRules(previousPopular?.rules || saved.draBilibiliPopularState?.runRules || bilibiliConfig.rules),
       settingsDraft:previousPopular?.settingsDraft || null,
       scheduleOptIn:previousPopular?.scheduleOptIn === true
     };
@@ -347,7 +383,10 @@ async function initialize() {
     bilibili.restore(saved);
     bilibiliPopular.restore(saved);
     if (savedState.route?.platform === "feigua" || savedState.route?.platform === "xingtu") state = cloneInitialState();
-    outbox = Array.isArray(saved[STORAGE_KEYS.outbox]) ? saved[STORAGE_KEYS.outbox] : [];
+    const legacyOutbox = saved[STORAGE_KEYS.outbox] ?? [];
+    if (!Array.isArray(legacyOutbox)) throw Error('旧上传队列格式异常，原始记录已保留');
+    await markObservationsUploaded(legacyOutbox.filter(item => ['written','duplicate'].includes(item?.status)).map(item => item.id));
+    outbox = await loadOutbox(legacyOutbox);
     await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
     await cleanupStoredObservations();
     cloudAuth = saved[STORAGE_KEYS.cloudAuth] && typeof saved[STORAGE_KEYS.cloudAuth] === "object"
@@ -360,10 +399,11 @@ async function initialize() {
       .filter((item) => ["dry-run", "bridge-disabled", "cloud-disabled", "write-error"].includes(item?.status) && isInvalidStoredCreatorName(item?.payload?.accountName || item?.payload?.author))
       .map((item) => item?.payload?.creatorKey)
       .filter(Boolean));
-    outbox = outbox.filter((item) => !(["dry-run", "bridge-disabled", "cloud-disabled", "write-error"].includes(item?.status) && isInvalidStoredCreatorName(item?.payload?.accountName || item?.payload?.author)));
+    removeOutbox(outbox.filter((item) => ["dry-run", "bridge-disabled", "cloud-disabled", "write-error"].includes(item?.status) && isInvalidStoredCreatorName(item?.payload?.accountName || item?.payload?.author)).map(item => item.id));
     for (const key of invalidQueuedKeys) {
       if (creatorIndex[key]?.status === "outbox") delete creatorIndex[key];
     }
+    await persistOutboxChanges();
     await chrome.storage.local.set({
       [STORAGE_KEYS.settings]: settings,
       [STORAGE_KEYS.rules]: rules,
@@ -371,9 +411,10 @@ async function initialize() {
       [STORAGE_KEYS.seenVideos]: seenVideos,
       [STORAGE_KEYS.creatorIndex]: creatorIndex,
       [STORAGE_KEYS.profileQueue]: [],
-      [STORAGE_KEYS.outbox]: outbox,
       ...feigua.storage(),
-      ...xingtu.storage()
+      ...xingtu.storage(),
+      ...bilibili.storage(),
+      ...bilibiliPopular.storage()
     });
     await feigua.timers();
     await xingtu.timers();
@@ -463,16 +504,25 @@ async function persistState(notificationTabId = state.feedTabId) {
   return task;
 }
 
+async function persistTaskProgress(storage) {
+  const task = workDataWrites.then(async () => {
+    await chrome.storage.local.set(storage);
+    chrome.runtime.sendMessage({type:'DRA_STATUS_CHANGED'}).catch(() => undefined);
+  });
+  workDataWrites = task.catch(() => undefined);
+  return task;
+}
+
 async function persistWorkData() {
   const task = workDataWrites.then(async () => {
   await flushDecisionHistory();
+  await persistOutboxChanges();
   await chrome.storage.local.set({
     [STORAGE_KEYS.state]: state,
     [STORAGE_KEYS.dailyStats]: dailyStats,
     [STORAGE_KEYS.seenVideos]: seenVideos,
     [STORAGE_KEYS.creatorIndex]: creatorIndex,
     [STORAGE_KEYS.profileQueue]: [],
-    [STORAGE_KEYS.outbox]: outbox,
     ...feigua.storage(),
     ...xingtu.storage(),
     ...kuaishou.storage(),
@@ -554,6 +604,7 @@ function addOutbox(status, payload, error = "", { transitionPending = false, own
     attempts: 0
   };
   outbox.push(item);
+  touchOutbox(item);
   return item;
 }
 
@@ -640,6 +691,7 @@ async function finalizeObservationTransition(recordId, transition = {}) {
     transition_ok: typeof transition.transitionOk === "boolean" ? transition.transitionOk : null
   };
   item.transitionPending = false;
+  touchOutbox(item);
   await persistWorkData();
   if (["pending", "write-error"].includes(item.status)) void requestUpload();
   return { ok: true, recordId };
@@ -651,6 +703,7 @@ async function settleInterruptedTransitions() {
     if (item.sessionId !== state.runId || !item.transitionPending) continue;
     item.transitionPending = false;
     item.payload.transition_ok = null;
+    touchOutbox(item);
     changed = true;
   }
   if (changed) await persistWorkData();
@@ -1049,7 +1102,7 @@ function uploadableOutbox() {
 function requestUpload() {
   const task=uploadScheduling.then(async()=>{
     if(!cloudReady())return;
-    const when=Date.now()+30_000;
+    const when=Date.now()+(uploadableOutbox().length >= 10 ? 100 : 30_000);
     const existing=await chrome.alarms.get(UPLOAD_ALARM);
     if(!existing || existing.scheduledTime>when)await chrome.alarms.create(UPLOAD_ALARM,{when});
   }).catch(error=>{
@@ -1083,11 +1136,27 @@ async function planUpload(force = false, retry = false) {
   if (!existing || existing.scheduledTime > when) await chrome.alarms.create(UPLOAD_ALARM, { when });
 }
 
-async function handleUploadAlarm() {
-  await initialize();
-  try { await flushOutbox({ force: true }); }
-  catch (error) { state.lastError = `研究台同步失败：${error?.message || String(error)}`; await persistState(); }
-  finally { await scheduleUpload(false, true); }
+function handleUploadAlarm() {
+  if (uploadDrainInFlight) return uploadDrainInFlight;
+  uploadDrainInFlight = (async () => {
+    await initialize();
+    const started = Date.now();
+    let successful = false;
+    try {
+      for (let batch = 0; batch < MAX_UPLOAD_BATCHES && Date.now()-started < MAX_UPLOAD_WORK_MS; batch++) {
+        const result = await flushOutbox({force:true});
+        successful = result.status === 'ok';
+        if (!successful || !(result.accepted || result.duplicated || result.rejected)) break;
+      }
+    } catch (error) {
+      successful = false;
+      state.lastError = `研究台同步失败：${error?.message || String(error)}`;
+      await persistState();
+    } finally {
+      await scheduleUpload(successful, !successful);
+    }
+  })().finally(() => { uploadDrainInFlight = null; });
+  return uploadDrainInFlight;
 }
 
 async function runCreatorUploadBackfill() {
@@ -1149,6 +1218,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       }
       const message=`研究台星图身份查询失败：${lookup.payload?.error || lookup.status}`;
       for(const item of rows){item.status='write-error';item.retryAt=Date.now()+30_000;item.error=message;item.lastTriedAt=new Date().toISOString();}
+      touchOutbox(...rows);
       if(owner)owner.lastError=message;
       await persistWorkData();
       return {status:'identity_lookup_error'};
@@ -1165,6 +1235,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.payload.rpa_feedback={...item.payload.rpa_feedback,sec_uid_lookup:secUid?'matched':'not_found'};
       if(secUid){item.payload.sec_uid=secUid;item.payload.rpa_feedback.sec_uid_source='creator_database_xingtu_id';}
     }
+    touchOutbox(...rows);
     await persistWorkData();
   }
   rows = shrinkRecordsToByteLimit(rows, encode);
@@ -1175,6 +1246,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.error = "单条观察超过上传体积上限";
     }
     incrementForSession(sessionId,"uploadRejected",rows.length);
+    touchOutbox(...rows);
     await persistWorkData();
     return { status: "rejected" };
   }
@@ -1192,6 +1264,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.lastTriedAt = new Date().toISOString();
     }
     if (owner) owner.lastError = `研究台上传失败：${message}`;
+    touchOutbox(...rows);
     await persistWorkData();
     await persistState();
     return { status: "network_error" };
@@ -1216,6 +1289,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.retryAt=Date.now()+Math.min(1800000,30000*2**Math.min(item.attempts,6));
     }
     if (permanent) incrementForSession(sessionId,"uploadRejected",rows.length);
+    touchOutbox(...rows);
     await persistWorkData();
     return { status: permanent ? "rejected" : "retry" };
   }
@@ -1241,6 +1315,8 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
       item.retryAt=Date.now()+30_000;
     }
   }
+  touchOutbox(...rows);
+  removeOutbox(rows.filter(item => ['written','duplicate'].includes(item.status)).map(item => item.id));
   await persistWorkData();
   await persistState();
   return { status: "ok", accepted: sets.accepted.size, duplicated: sets.duplicated.size, rejected: sets.rejected.size };
@@ -2461,7 +2537,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         bilibiliPopular.clear();
         seenVideos = [];
         creatorIndex = {};
-        outbox = [];
+        removeOutbox(outbox.map(item => item.id));
         await persistWorkData();
         return { ok: true };
       default:

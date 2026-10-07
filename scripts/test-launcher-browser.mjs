@@ -56,8 +56,9 @@ try {
  await waitFor(()=>evaluate(page,`Boolean(document.getElementById('dra-floating-launcher'))`),'launcher installed');
  await evaluate(sw,`launcherTest.set({status:'running',runId:'launcher-test',stats:{scanned:19},feedTabId:null})`);
  await waitFor(()=>evaluate(page,`document.getElementById('dra-floating-launcher').hasAttribute('data-visible')`),'visible');
- const get=()=>evaluate(page,`(()=>{const h=document.getElementById('dra-floating-launcher'),b=h.shadowRoot.querySelector('button'),r=b.getBoundingClientRect();return {visible:h.hasAttribute('data-visible'),theme:h.dataset.theme,label:b.getAttribute('aria-label'),x:r.x+r.width/2,y:r.y+r.height/2,top:r.top,width:r.width}})()`);
- let info=await get();assert.match(info.label,/19/);assert.equal(info.width,36);
+ const get=()=>evaluate(page,`(()=>{const h=document.getElementById('dra-floating-launcher'),b=h.shadowRoot.querySelector('button'),r=b.getBoundingClientRect();return {visible:h.hasAttribute('data-visible'),theme:h.dataset.theme,status:h.dataset.status,rows:h.shadowRoot.querySelector('.task-list').textContent,label:b.getAttribute('aria-label'),x:r.x+r.width/2,y:r.y+r.height/2,top:r.top,width:r.width}})()`);
+ await waitFor(async()=>/19/.test((await get()).rows),'task progress rendered');
+ let info=await get();assert.match(info.rows,/19/);assert.equal(info.width,36);
  await cmd('Input.dispatchMouseEvent',{type:'mousePressed',x:info.x,y:info.y,button:'left',clickCount:1},page);
  await cmd('Input.dispatchMouseEvent',{type:'mouseMoved',x:info.x-100,y:info.y-90,button:'left',buttons:1},page);
  await cmd('Input.dispatchMouseEvent',{type:'mouseReleased',x:info.x-100,y:info.y-90,button:'left',clickCount:1},page);

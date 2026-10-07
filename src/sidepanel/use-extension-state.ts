@@ -230,12 +230,28 @@ export function useExtensionState() {
   }, [checkCloud, refresh, show]);
 
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let active = true, refreshing = false, dirty = false;
+    const schedule = () => {
+      dirty = true;
+      if (timer !== null || refreshing) return;
+      timer = setTimeout(async () => {
+        timer = null;
+        dirty = false;
+        refreshing = true;
+        try { await refresh(); } catch { /* The next notification or visibility refresh retries. */ }
+        finally {
+          refreshing = false;
+          if (active && dirty) schedule();
+        }
+      }, 200);
+    };
     const listener = (event: unknown) => {
       const message = event as { type?: string; tabId?: number | null };
-      if (message.type === "DRA_STATUS_CHANGED" || message.type === "DRA_HISTORY_CHANGED") void refresh().catch(() => undefined);
+      if (message.type === "DRA_STATUS_CHANGED" || message.type === "DRA_HISTORY_CHANGED") schedule();
     };
     chrome.runtime.onMessage.addListener(listener);
-    return () => chrome.runtime.onMessage.removeListener(listener);
+    return () => { active = false; if (timer !== null) clearTimeout(timer); chrome.runtime.onMessage.removeListener(listener); };
   }, [refresh]);
 
   useEffect(() => {

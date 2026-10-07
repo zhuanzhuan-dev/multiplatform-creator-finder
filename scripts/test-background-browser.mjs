@@ -106,7 +106,7 @@ try{
   if(i===14){await api(`chrome.windows.update(${feedTab.windowId},{state:'normal',focused:false})`);report.scenarios.push('restored-unfocused');}
  }
  if(process.env.LIVE_RUN==='1'){
-  const entries=await api(`chrome.storage.local.get('draOutbox').then(v=>v.draOutbox||[])`);
+  const entries=await api(`new Promise((resolve,reject)=>{const request=indexedDB.open('dra-upload-queue');request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,tx=db.transaction('records'),rows=tx.objectStore('records').getAll();rows.onsuccess=()=>resolve(rows.result);tx.oncomplete=()=>db.close();tx.onabort=()=>{db.close();reject(tx.error);};};})`);
   report.liveResults={observations:entries.length,confirmedTransitions:entries.filter(e=>e.payload?.transition_ok===true).length,dwellSeconds:entries.map(e=>e.payload?.dwell_seconds),decisions:entries.map(e=>e.payload?.decision)};
   assert.ok(report.liveResults.confirmedTransitions>0,'real page must confirm at least one transition');
   report.scenarios.push('live-douyin-background-read-and-transition');
