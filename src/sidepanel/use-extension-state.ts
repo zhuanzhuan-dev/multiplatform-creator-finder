@@ -150,7 +150,7 @@ export function useExtensionState() {
     try {
       const response = await sendRuntime<SaveResponse>({
         type: "DRA_SAVE_CONFIG", platform,
-        rules: nextRules
+        rules: { ...nextRules, hard: { ...nextRules.hard, minFollowers: nextRules.hard.minFollowers === "" ? null : nextRules.hard.minFollowers, maxFollowers: nextRules.hard.maxFollowers === "" ? null : nextRules.hard.maxFollowers } }
       });
       if ((snapshotRef.current?.configPlatform || snapshotRef.current?.state?.route?.platform || "douyin") !== platform) return response;
       setSnapshot((value) => value ? { ...value, settings: response.settings, rules: response.rules } : value);
@@ -176,7 +176,8 @@ export function useExtensionState() {
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_START", tabId: tab.id, platform });
       } else if (action === "resume") {
-        show("正在恢复本轮，保留已有计数与记录…");
+        show("正在按目标恢复本轮，保留已有计数与记录…");
+        if (!["feigua", "xingtu"].includes(platform)) await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform, runId: snapshot?.state?.runId });
       } else if (action === "pause") {

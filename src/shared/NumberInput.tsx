@@ -8,9 +8,9 @@ export function inputNumber(value: string): number | "" {
   return value === "" ? "" : Number(value);
 }
 
-export function NumberInput({ value, disabled, min, max, step = "any", ...props }: NumberInputProps) {
+export function NumberInput({ value, disabled, min, max, step = "any", allowEmpty = false, ...props }: NumberInputProps & { allowEmpty?: boolean }) {
   const hintId = useId();
-  const error = disabled ? "" : value === "" ? "请输入数值"
+  const error = disabled ? "" : value === "" ? (allowEmpty ? "" : "请输入数值")
     : !Number.isFinite(value) ? "请输入有效数字"
       : min != null && value < Number(min) ? `最小为 ${min}`
         : max != null && value > Number(max) ? `最大为 ${max}`

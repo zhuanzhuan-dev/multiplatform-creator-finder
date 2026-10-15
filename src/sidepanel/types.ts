@@ -1,3 +1,4 @@
+import { mergeScoring, DEFAULT_SCORING } from '../../lib/scoring-rules.js';
 import { DEFAULT_KEYWORDS as FEIGUA_KEYWORDS } from "../../lib/feigua-parser.js";
 import { DEFAULT_KEYWORDS as XINGTU_KEYWORDS } from "../../lib/xingtu-parser.js";
 export interface Stats {
@@ -232,15 +233,22 @@ export interface CategoryRule {
 const PLAY_OPS = ["<", "<=", ">", ">="] as const;
 type PlayOp = typeof PLAY_OPS[number];
 
+export interface ScoringRules {
+  likes: { min: number | ""; points: number | "" }[];
+  followers: { min: number | ""; max: number | null; points: number | "" }[];
+  levels: Record<"S" | "A", { enabled: boolean; minFollowers: number | ""; maxFollowers: number | null; minAverageLikes: number | ""; requireCategory: boolean }>;
+}
+
 export interface RuleSettings {
   version?: number;
   platform?: string;
   includeLive: boolean;
   includeDigital?: boolean;
+  excludeOgv?: boolean;
+  scoring: ScoringRules;
   hard: {
     minVideoDurationSeconds: number | "";
     minVideoLikes: number | "";
-    preferredVideoLikes: number | "";
     minFollowers: number | "";
     maxFollowers: number | "";
     minPlays?: number | "";
@@ -268,12 +276,12 @@ export interface RuleSettings {
 }
 
 const FALLBACK_RULES: RuleSettings = {
-  version: 4,
+  version: 5,
   includeLive: false,
+  scoring: DEFAULT_SCORING,
   hard: {
     minVideoDurationSeconds: 60,
     minVideoLikes: 3000,
-    preferredVideoLikes: 4000,
     minFollowers: 10000,
     maxFollowers: 5000000
   },
@@ -333,10 +341,11 @@ export function rulesDraft(value: unknown): RuleSettings {
     version: Number(source.version || FALLBACK_RULES.version),
     includeLive: false,
     includeDigital: source.includeDigital === true,
+    excludeOgv: source.excludeOgv !== false,
+    scoring: mergeScoring(source),
     hard: {
       minVideoDurationSeconds: Number(hard.minVideoDurationSeconds ?? FALLBACK_RULES.hard.minVideoDurationSeconds),
       minVideoLikes: Number(hard.minVideoLikes ?? FALLBACK_RULES.hard.minVideoLikes),
-      preferredVideoLikes: Number(hard.preferredVideoLikes ?? FALLBACK_RULES.hard.preferredVideoLikes),
       minFollowers: hard.minFollowers == null ? "" : Number(hard.minFollowers ?? FALLBACK_RULES.hard.minFollowers),
       maxFollowers: hard.maxFollowers == null ? "" : Number(hard.maxFollowers ?? FALLBACK_RULES.hard.maxFollowers),
       ...(isBilibili ? {

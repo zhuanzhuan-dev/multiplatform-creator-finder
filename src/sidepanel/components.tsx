@@ -1,3 +1,4 @@
+import { ScoringRulesEditor } from './ScoringRulesEditor';
 import { errorMessage } from '../shared/error-message';
 import { sourcePlatformLabel } from "../../lib/source-platform.js";
 import { extractXingtuId } from "../../lib/xingtu-parser.js";
@@ -41,15 +42,16 @@ interface RunOverviewProps {
   now: number;
   busyAction: string;
   startDisabled?: boolean;
+  resumeTarget?: RunState["runTarget"];
   onStart(): void;
   onResume(): void;
   onPause(): void;
   onStop(): void;
 }
 
-export function RunOverview({ state, cloud, outboxCount, schedule, now, busyAction, startDisabled, onStart, onResume, onPause, onStop }: RunOverviewProps) {
+export function RunOverview({ state, cloud, outboxCount, schedule, now, busyAction, startDisabled, resumeTarget, onStart, onResume, onPause, onStop }: RunOverviewProps) {
   const active = state.status === "starting" || state.status === "running";
-  const resumable = canResumeRun(state);
+  const resumable = canResumeRun(state, resumeTarget || state.runTarget);
   const uploadHealth = cloud?.connected ? outboxCount > 0 ? `待同步 ${outboxCount} 条` : "同步正常" : "研究台未连接";
   const phaseLabels: Record<string, string> = { read: "读取视频", profile: "读取达人", dwell: "等待切换", submit: "保存结果", transition: "切换视频", idle: "准备下一条" };
   const runtimeHealth = state.runtime?.deadlineAt && now > state.runtime.deadlineAt + 15_000
@@ -312,7 +314,7 @@ export function ScheduleEditor({ draft, disabled, onChange, platform }: { draft:
           {copy.showTarget && draft.scheduleTargetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.scheduleMaxItems} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleMaxItems")} /></label> : null}
           <label>允许延迟启动（分钟）<NumberInput aria-describedby="scheduleDelayHelp" min="0" max="60" value={draft.scheduleLateToleranceMinutes} disabled={disabled || !draft.scheduleEnabled} onChange={number("scheduleLateToleranceMinutes")} /></label>
         </div>
-        <p className="field-note" id="scheduleDelayHelp">定时触发晚于计划时，在此时间内仍可启动；超过则跳过本次任务。</p>
+        <p className="field-note" id="scheduleDelayHelp">定时触发晚于计划时，在此时间内仍可启动；超过则跳过。运行中跳过本次定时；暂停或停止时按计划开始新一轮。</p>
         <label className="check"><input type="checkbox" checked={draft.scheduleReuseExistingTab} disabled={disabled || !draft.scheduleEnabled} onChange={(event) => onChange({ ...draft, scheduleReuseExistingTab: event.target.checked })} />{copy.reuse}</label>
         <button type="button" className="preset-button" disabled={disabled} onClick={applyPreset}>应用默认预设</button>
       </div>
@@ -360,8 +362,8 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
         </section> : null}
 
         <section className="setting-group" aria-labelledby="targetSettingTitle">
-          <div className="setting-heading"><strong id="targetSettingTitle">任务目标</strong><span>达到任一启用条件即停止</span></div>
-          <p className="field-note">继续本轮会沿用原目标，暂停时间不计入时长。修改后的目标在新一轮生效。</p>
+          <div className="setting-heading"><strong id="targetSettingTitle">手动任务目标</strong><span>达到任一启用条件即停止</span></div>
+          <p className="field-note">手动开始或继续本轮采用此目标。继续时保留计数和已运行时长，暂停时间不计入；定时启动采用下方目标。</p>
           <div className="form-grid">
             <label>停止方式<select value={draft.targetMode} disabled={disabled} onChange={(event) => onChange({ ...draft, targetMode: event.target.value as SettingsDraft["targetMode"] })}><option value="time">按时间</option><option value="count">按视频数</option><option value="both">双重限制</option></select></label>
             {draft.targetMode !== "count" ? <label>运行时长（分钟）<NumberInput min="1" max="1440" step="1" value={draft.targetDurationMinutes} disabled={disabled} onChange={number("targetDurationMinutes")} /></label> : null}
@@ -392,6 +394,8 @@ interface AdvancedRulesPanelProps {
   onChange(next: RuleSettings): void;
   onSave(): void;
   engagement: React.ReactNode;
+  applyOnResume?: boolean;
+  keywordPlatform?: "douyin" | "kuaishou";
 }
 
 function terms(value: string): string[] {
@@ -478,7 +482,7 @@ export function TermChips({ label, values, disabled, onChange }: { label: string
   );
 }
 
-export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engagement, variant="default" }: AdvancedRulesPanelProps & {variant?: "default" | "bilibili"}) {
+export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engagement, applyOnResume = false, keywordPlatform = "douyin", variant="default" }: AdvancedRulesPanelProps & {variant?: "default" | "bilibili"}) {
   const setHard = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...draft, hard: { ...draft.hard, [key]: inputNumber(event.target.value) } });
   };
@@ -522,9 +526,12 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
         <div className="disclosure-body rules-form">
           <section className="setting-group" aria-labelledby="hardRulesTitle">
             <div className="setting-heading"><strong id="hardRulesTitle">B站准入门槛</strong><span>以播放量与时长为主，不使用抖音点赞逻辑</span></div>
-            <div className="form-grid one-field">
+            <div className="form-grid">
+              <label>最低粉丝<NumberInput allowEmpty placeholder="不限" min="0" value={hard.minFollowers} disabled={disabled} onChange={setHard("minFollowers")} /></label>
+              <label>最高粉丝<NumberInput allowEmpty placeholder="不限" min="0" value={hard.maxFollowers} disabled={disabled} onChange={setHard("maxFollowers")} /></label>
               <label>最短时长（秒）<NumberInput min="1" value={hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
             </div>
+            <p className="field-note">粉丝上下限留空表示不限；粉丝数未读全时交人工确认。</p>
             <PlayRuleList kind="reject" title="直接淘汰" hint="对上任意一条就剔除" rows={draft.playRules?.reject || []} disabled={disabled} onChange={(reject) => onChange({ ...draft, playRules: { reject, prefer: draft.playRules?.prefer || [] } })} />
             <PlayRuleList kind="prefer" title="理想" hint="对上任意一条算命中" rows={draft.playRules?.prefer || []} disabled={disabled} onChange={(prefer) => onChange({ ...draft, playRules: { prefer, reject: draft.playRules?.reject || [] } })} />
             <p className="field-note">先看直接淘汰，再看理想。都对不上的交人工确认。</p>
@@ -532,26 +539,28 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
           </section>
           <section className="setting-group" aria-labelledby="excludeRulesTitle">
             <div className="setting-heading"><strong id="excludeRulesTitle">特殊内容剔除</strong><span>分区名和关键词分开，两者是「或」</span></div>
+            <label className="check"><input type="checkbox" checked={draft.excludeOgv !== false} disabled={disabled} onChange={(event) => onChange({ ...draft, excludeOgv: event.target.checked })} />排除平台标记的影视内容（OGV）</label>
+            <p className="field-note">关闭后仍按下方分区和关键词判断；旧版额外排除词已合并到关键词黑名单。</p>
             <TermChips label="分区名黑名单" values={(draft.excludeTnames as string[]) || []} disabled={disabled} onChange={(excludeTnames) => onChange({ ...draft, excludeTnames })} />
             <TermChips label="关键词黑名单" values={(draft.contentBlacklist as string[]) || []} disabled={disabled} onChange={(contentBlacklist) => onChange({ ...draft, contentBlacklist })} />
-            <p className="field-note">对上任意一个分区名，或对上任意一个关键词，即淘汰。分区名只比分区名。关键词只比标题、作者名和推荐理由，不比分区名。</p>
+            <p className="field-note"><strong>关键词匹配：</strong>视频标题、UP 主昵称、推荐理由。任意字段包含任意一个排除词，即淘汰。分区名黑名单单独匹配视频分区。</p>
           </section>
           <section className="setting-group" aria-labelledby="categoryRulesTitle">
             <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
-            <p className="field-note">每个类目里，分区名和关键词是「或」：对上任意一个分区名，或对上任意一个关键词，即算这个类目。这不代替理想规则的命中。</p>
-            {engagement}
+            <p className="field-note"><strong>关键词匹配：</strong>视频标题、UP 主昵称、推荐理由。<strong>分区名匹配：</strong>当前视频所属分区。</p>
+            <p className="field-note">任意字段包含一个关键词，或命中一个分区名，就命中该类目。多个类目命中时按优先级排序；未命中类目且通过其他门槛时交人工确认。播放与时长门槛单独判断。</p>
             <div className="category-list">
               {draft.positiveCategories.map((category, index) => (
                 <details className="category-editor" key={category.id}>
                   <summary>
                     <span className={`category-dot ${category.enabled === false ? "off" : ""}`} aria-hidden="true" />
-                    <span><strong>{category.name}</strong><small>{(category.partitions || []).length} 个分区 · {category.keywords.length} 个关键词 · +{category.score} 分</small></span>
+                    <span><strong>{category.name}</strong><small>{(category.partitions || []).length} 个分区 · {category.keywords.length} 个关键词 · 优先级 {category.score}</small></span>
                   </summary>
                   <div className="category-fields">
                     <label className="check"><input type="checkbox" checked={category.enabled !== false} disabled={disabled} onChange={(event) => updateCategory(index, { enabled: event.target.checked })} />启用这个类目</label>
                     <div className="form-grid">
                       <label>类目名称<input type="text" value={category.name} disabled={disabled} onChange={(event) => updateCategory(index, { name: event.target.value })} /></label>
-                      <label>命中加分<NumberInput min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: inputNumber(event.target.value) })} /></label>
+                      <label>类目优先级<NumberInput min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: inputNumber(event.target.value) })} /></label>
                     </div>
                     <TermChips label="分区名" values={category.partitions || []} disabled={disabled} onChange={(partitions) => updateCategory(index, { partitions })} />
                     <TermChips label="关键词" values={category.keywords} disabled={disabled} onChange={(keywords) => updateCategory(index, { keywords })} />
@@ -562,6 +571,8 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
             </div>
             <button className="add-category" disabled={disabled} onClick={addCategory}>＋ 添加内容类别</button>
           </section>
+          <p className="field-note">规则在开始新一轮时生效；继续暂停任务仍使用本轮规则。</p>
+          {engagement}
           <div className="form-actions"><button disabled={disabled} onClick={onSave}>保存 B 站规则</button></div>
         </div>
       </div>
@@ -576,9 +587,8 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
           <div className="form-grid">
             <label>最短视频（秒）<NumberInput min="1" value={draft.hard.minVideoDurationSeconds} disabled={disabled} onChange={setHard("minVideoDurationSeconds")} /></label>
             <label>最低点赞<NumberInput min="0" value={draft.hard.minVideoLikes} disabled={disabled} onChange={setHard("minVideoLikes")} /></label>
-            <label>优选点赞<NumberInput min="0" value={draft.hard.preferredVideoLikes} disabled={disabled} onChange={setHard("preferredVideoLikes")} /></label>
-            <label>最低粉丝<NumberInput min="0" value={draft.hard.minFollowers} disabled={disabled} onChange={setHard("minFollowers")} /></label>
-            <label>最高粉丝<NumberInput min="0" value={draft.hard.maxFollowers} disabled={disabled} onChange={setHard("maxFollowers")} /></label>
+            <label>最低粉丝<NumberInput allowEmpty placeholder="不限" min="0" value={draft.hard.minFollowers} disabled={disabled} onChange={setHard("minFollowers")} /></label>
+            <label>最高粉丝<NumberInput allowEmpty placeholder="不限" min="0" value={draft.hard.maxFollowers} disabled={disabled} onChange={setHard("maxFollowers")} /></label>
           </div>
           <p className="field-note">仅筛选普通视频。直播（含图文直播）、图文、广告及类型未确认的内容会自动跳过。</p>
         </section>
@@ -597,8 +607,13 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
 
         <section className="setting-group" aria-labelledby="categoryRulesTitle">
           <div className="setting-heading"><strong id="categoryRulesTitle">想找的内容</strong><span>启用 {draft.positiveCategories.filter((item) => item.enabled !== false).length} / {draft.positiveCategories.length}</span></div>
-          <p className="field-note">按视频描述、话题及账号资料中的关键词初筛。未匹配类别但满足其他条件的账号，仍保存为候选，交给人工确认。</p>
-          {engagement}
+          <div className="keyword-match-scope">
+            <p className="field-note"><strong>视频流：</strong>当前视频文案、话题标签、作者昵称。</p>
+            <p className="field-note"><strong>账号资料：</strong>{keywordPlatform === "kuaishou" ? "昵称、简介、已读取作品的封面描述。" : "昵称、简介、抖音号、已读取作品的卡片文字和封面描述。"}</p>
+            <p className="field-note"><strong>怎么命中：</strong>任意字段包含该类目的任意一个词，就命中该类目。例如“探店”可以命中文案里的“周末探店”，也可以命中话题“#探店”。</p>
+            <p className="field-note"><strong>未命中：</strong>通过其他门槛后仍保存为候选，交人工确认。类目名称和受众备注不参与关键词匹配。</p>
+            <details className="field-note"><summary>字段缺失时如何匹配</summary><p>视频文案、话题、作者昵称全部缺失时，使用当前视频卡片文本。账号资料只使用已读取到的字段；音频、画面和图片不会做语音识别或文字识别。</p></details>
+          </div>
           <div className="category-list">
             {draft.positiveCategories.map((category, index) => (
               <details className="category-editor" key={category.id}>
@@ -608,12 +623,13 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
                 </summary>
                 <div className="category-fields">
                   <label className="check"><input type="checkbox" checked={category.enabled !== false} disabled={disabled} onChange={(event) => updateCategory(index, { enabled: event.target.checked })} />启用这个类目</label>
+                  <TermChips label="关键词" values={category.keywords} disabled={disabled} onChange={(keywords) => updateCategory(index, { keywords })} />
+                  <p className="field-note">点击＋添加词，回车确认，× 删除；可粘贴多个词，用逗号、顿号或换行分隔。</p>
                   <div className="form-grid">
                     <label>类目名称<input type="text" value={category.name} disabled={disabled} onChange={(event) => updateCategory(index, { name: event.target.value })} /></label>
                     <label>命中加分<NumberInput min="0" max="100" value={category.score} disabled={disabled} onChange={(event) => updateCategory(index, { score: inputNumber(event.target.value) })} /></label>
                   </div>
-                  <label>受众描述<input type="text" value={category.audience} disabled={disabled} onChange={(event) => updateCategory(index, { audience: event.target.value })} /></label>
-                  <label>关键词<textarea rows={3} value={category.keywords.join("、")} disabled={disabled} placeholder="美食、探店、烹饪" onChange={(event) => updateCategory(index, { keywords: terms(event.target.value) })} /></label>
+                  <label>受众备注（不参与匹配）<input type="text" value={category.audience} disabled={disabled} onChange={(event) => updateCategory(index, { audience: event.target.value })} /></label>
                   <button className="danger-text compact category-remove" disabled={disabled || draft.positiveCategories.length <= 1} onClick={() => removeCategory(index)}>删除这个类目</button>
                 </div>
               </details>
@@ -624,10 +640,13 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
 
         <section className="setting-group" aria-labelledby="blacklistRulesTitle">
           <div className="setting-heading"><strong id="blacklistRulesTitle">不需要的内容</strong><span>包含排除词时跳过</span></div>
-          <label>排除关键词<textarea rows={3} value={draft.gameBlacklist.join("、")} disabled={disabled} placeholder="和平精英、我的世界" onChange={(event) => onChange({ ...draft, gameBlacklist: terms(event.target.value) })} /></label>
-          <p className="field-note">适用于任何不需要的内容，使用逗号、顿号或换行分隔。匹配视频描述、话题及账号简介、作品文字等可读取信息中的关键词，不仅限于话题标签。排除条件优先。</p>
+          <TermChips label="排除关键词" values={draft.gameBlacklist} disabled={disabled} onChange={(gameBlacklist) => onChange({ ...draft, gameBlacklist })} />
+          <p className="field-note">匹配范围与上方“想找的内容”一致。视频字段命中时跳过该视频；账号资料命中时淘汰该账号本次候选。排除词优先于正向关键词。</p>
         </section>
 
+        {engagement}
+        <ScoringRulesEditor value={draft.scoring} disabled={disabled} onChange={(scoring) => onChange({ ...draft, scoring })} />
+        <p className="field-note">{applyOnResume ? "规则在开始或继续任务时生效。" : "规则在开始新一轮时生效；继续暂停任务仍使用本轮规则。"}评分只影响排序与分级，账号先通过上方准入条件。</p>
         <button className="primary compact save-rules" disabled={disabled} onClick={onSave}>保存规则</button>
       </div>
     </div>

@@ -79,8 +79,15 @@ function taskConfigPlatform(task) {
   if (task?.route?.platform === "bilibili" && task.route?.surface === "popular") return "bilibili-popular";
   return task?.route?.platform || "douyin";
 }
-function bilibiliSettingsFrom(savedConfig, fallback) {
-  const merged = mergeSettings(savedConfig?.settings || fallback);
+function recommendationSettingsFrom(savedConfig, previousRunSettings, fallback) {
+  return mergeSettings(savedConfig?.settings || previousRunSettings || {
+    ...fallback,
+    target: DEFAULT_SETTINGS.target,
+    schedule: { ...fallback?.schedule, target: DEFAULT_SETTINGS.schedule.target }
+  });
+}
+function bilibiliSettingsFrom(savedConfig, previousRunSettings, fallback) {
+  const merged = recommendationSettingsFrom(savedConfig, previousRunSettings, fallback);
   if (savedConfig?.scheduleOptIn !== true) merged.schedule = { ...merged.schedule, enabled: false };
   return merged;
 }
@@ -312,7 +319,7 @@ async function initialize() {
     settingsDraft = saved[STORAGE_KEYS.settingsDraft] || null;
     rules = mergeRules(savedRules);
     const previousKuaishou = saved.draKuaishouConfig;
-    const kuaishouSettings = mergeSettings(previousKuaishou?.settings || saved.draKuaishou?.state?.runSettings || settings);
+    const kuaishouSettings = recommendationSettingsFrom(previousKuaishou, saved.draKuaishou?.state?.runSettings, settings);
     kuaishouSettings.schedule = scheduleFrom(kuaishouSettings.schedule, previousKuaishou?.scheduleOptIn === true);
     kuaishouConfig = {
       settings:kuaishouSettings,
@@ -323,14 +330,14 @@ async function initialize() {
     await chrome.storage.local.set({draKuaishouConfig:kuaishouConfig});
     const previousBilibili = saved.draBilibiliConfig;
     bilibiliConfig = {
-      settings:bilibiliSettingsFrom(previousBilibili, saved.draBilibiliState?.runSettings || settings),
+      settings:bilibiliSettingsFrom(previousBilibili, saved.draBilibiliState?.runSettings, settings),
       rules:mergeBilibiliRules(previousBilibili?.rules || saved.draBilibiliState?.runRules || {}),
       settingsDraft:previousBilibili?.settingsDraft || null,
       scheduleOptIn:previousBilibili?.scheduleOptIn === true
     };
     const previousPopular = saved.draBilibiliPopularConfig;
     bilibiliPopularConfig = {
-      settings:bilibiliSettingsFrom(previousPopular, bilibiliConfig.settings),
+      settings:bilibiliSettingsFrom(previousPopular, saved.draBilibiliPopularState?.runSettings, bilibiliConfig.settings),
       rules:mergeBilibiliRules(previousPopular?.rules || saved.draBilibiliPopularState?.runRules || bilibiliConfig.rules),
       settingsDraft:previousPopular?.settingsDraft || null,
       scheduleOptIn:previousPopular?.scheduleOptIn === true
@@ -1830,9 +1837,10 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   }
 }
 
-async function resumeRun({ windowId } = {}) {
+async function resumeRun({ windowId, target } = {}) {
   await initialize();
-  if (!canResumeRun(state)) throw new Error("本轮已结束或达到目标，请开始新一轮");
+  const runTarget = normalizeRunTarget(target || state.runTarget || {});
+  if (!canResumeRun(state, runTarget)) throw new Error("本轮已结束或达到目标，请开始新一轮");
   const runId = state.runId;
   const problems = [...validateSettings(settings), ...validateRules(rules)];
   if (problems.length) throw new Error(problems.join("；"));
@@ -1842,6 +1850,7 @@ async function resumeRun({ windowId } = {}) {
     await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
   }
   if (state.runId !== runId || state.status !== "paused") throw new Error("任务状态已变化，请重试");
+  state.runTarget = runTarget;
   const previousFeedTabId = state.feedTabId;
   const elapsedMs = elapsedRunMs(state);
   const pausedAt = state.pausedAt || Date.parse(state.endedAt || "") || Date.now();
@@ -2460,10 +2469,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return {ok:true,state:platform === 'feigua' ? await feigua.start(tab.id) : platform === 'xingtu' ? await xingtu.start(tab.id) : await startRun({tabId:message.tabId})};
       }
       case "DRA_RESUME":
-        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.resume({windowId:message.windowId})};
-        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibiliBySelection(message.platform).resume({windowId:message.windowId})};
+        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.resume({windowId:message.windowId,target:kuaishouConfig.settings.target})};
+        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibiliBySelection(message.platform).resume({windowId:message.windowId,target:configurationFor(message.platform).settings.target})};
         if(message.platform==="xingtu")return {ok:true,state:await xingtu.resume({windowId:message.windowId})};
-        return { ok: true, state: message.platform === "feigua" ? await feigua.resume({windowId:message.windowId}) : await resumeRun({ windowId: message.windowId }) };
+        return { ok: true, state: message.platform === "feigua" ? await feigua.resume({windowId:message.windowId}) : await resumeRun({ windowId: message.windowId, target:settings.target }) };
       case "DRA_PAUSE":
         if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.pause()};
         if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibiliBySelection(message.platform).pause()};
