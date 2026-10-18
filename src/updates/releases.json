@@ -1,5 +1,22 @@
 [
   {
+    "version": "1.1.25",
+    "recordedAt": "2026-10-19",
+    "summary": "业务采集和设备配对接入公司 SIC，Supabase Storage 由服务端临时保留。",
+    "items": [
+      {
+        "title": "公司接口接入",
+        "description": "采集上传、设备配对和历史查询改用公司 SIC 地址，扩展不再向 Supabase 业务接口发送 publishable key。"
+      },
+      {
+        "title": "Storage 平稳过渡",
+        "description": "证据对象继续由服务端使用 Supabase Storage，扩展端无需配置 Storage 地址。"
+      }
+    ],
+    "notice": "更新后重新加载扩展，验证研究台连接、设备配对和采集上传。确认新版本稳定后再关闭旧 Supabase 业务入口。",
+    "sourceCommit": ""
+  },
+  {
     "version": "1.1.24",
     "recordedAt": "2026-10-15",
     "summary": "任务目标默认按时间，暂停后按新目标继续；开放各平台筛选、评分与分级配置。",
