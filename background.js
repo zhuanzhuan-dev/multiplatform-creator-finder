@@ -57,6 +57,8 @@ const cloudClient = createCloudClient();
 const MAX_UPLOAD_ATTEMPTS = 8;
 const MAX_UPLOAD_BATCHES = 5;
 const MAX_UPLOAD_WORK_MS = 5_000;
+const COMPANY_SSO_REQUIRED_ERROR = "company_sso_required";
+const COMPANY_SSO_REQUIRED_MESSAGE = "请先打开研究台完成公司登录，再重试上传";
 
 let initialized = null;
 const pendingPanelSelections = new Map();
@@ -652,6 +654,17 @@ function cloudReady() {
   return Boolean(cloudAuth?.device_token && !cloudAuth?.expired);
 }
 
+function isCompanySsoRequired(result) {
+  return result?.payload?.error === COMPANY_SSO_REQUIRED_ERROR;
+}
+
+async function reportCompanySsoRequired(owner = null) {
+  state.lastError = COMPANY_SSO_REQUIRED_MESSAGE;
+  if (owner && owner !== state) owner.lastError = COMPANY_SSO_REQUIRED_MESSAGE;
+  await persistWorkData();
+  return { status: COMPANY_SSO_REQUIRED_ERROR };
+}
+
 function dwellSecondsFor(observation) {
   const actual = Number(observation?.dwellSeconds);
   if (Number.isFinite(actual) && actual >= 0) return actual;
@@ -1216,6 +1229,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     catch(error){lookup={ok:false,status:503,payload:{error:error?.message || String(error)}};}
     if(cloudAuth!==uploadingAuth)return {status:'auth_error',reason:'connection_changed'};
     if(!lookup.ok || !Array.isArray(lookup.payload?.matches)){
+      if (isCompanySsoRequired(lookup)) return reportCompanySsoRequired(owner);
       if(lookup.status===401){
         cloudAuth.expired=true;
         await persistCloudAuth();
@@ -1277,6 +1291,8 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
     return { status: "network_error" };
   }
 
+  if (isCompanySsoRequired(result)) return reportCompanySsoRequired(owner);
+
   const kind = classifyIngestStatus(result.status);
   if (kind === "auth_error") {
     if (cloudAuth !== uploadingAuth) return { status: "auth_error", reason: "connection_changed" };
@@ -1334,6 +1350,11 @@ async function checkCloudConnection() {
   const auth = cloudAuth;
   const result = await cloudClient.checkAuth(auth.device_token, pluginVersion());
   if (cloudAuth !== auth) throw new Error("研究台连接已变更，请重试");
+  if (isCompanySsoRequired(result)) {
+    state.lastError = COMPANY_SSO_REQUIRED_MESSAGE;
+    await persistState();
+    throw new Error(COMPANY_SSO_REQUIRED_MESSAGE);
+  }
   if (result.status === 401) {
     cloudAuth.expired = true;
     await persistCloudAuth();
