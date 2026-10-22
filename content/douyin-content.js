@@ -2,6 +2,7 @@ import { captureCurrentRaw, rawCaptureEnabled } from "./raw-capture.js";
 import { contentSkipDecision } from "../lib/content-type.js";
 import { evaluateVideoRules, evaluateCreatorRules } from "../lib/rule-engine.js";
 import { sampleDwellSeconds } from "../lib/dwell.js";
+import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
 
 (function installDouyinAutomation() {
   "use strict";
@@ -453,6 +454,13 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
 
         // Only candidates that pass video and creator rules receive viewing time.
         const shouldDwell = videoDecision.matched && evaluateCreatorRules(profile, rules).matched;
+        if (shouldDwell) {
+          const ip = await sendRuntime({ type: "DRA_DOUYIN_PROFILE_IP",
+            secUid: profile.secUid || observation.secUid,
+            profileUrl: profile.profileUrl || observation.profileUrl });
+          assertRunning();
+          if (ip?.ok && ip.ipLocation) profile = { ...profile, ...ip.ipLocation };
+        }
         const targetDwellMs = shouldDwell ? (resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : sampleDwellSeconds(dwellPolicy) * 1_000) : 0;
         const waitUntil = shouldDwell && resumedDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
         if (shouldDwell) await progress("dwell", { waitUntil, cycleStartedAt: tickStartedAt, plannedDwellSeconds: targetDwellMs / 1_000 });
@@ -548,6 +556,10 @@ import { sampleDwellSeconds } from "../lib/dwell.js";
 
   let loop = null;
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "DRA_DOUYIN_IP_READ") {
+      sendResponse({ ok: true, ipLocation: readDouyinIpLocation(document, message.secUid) });
+      return false;
+    }
     if (message?.type === "DRA_START_LOOP") {
       if (!message.runId || !message.loopId) { sendResponse({ ok: false }); return false; }
       if (!loop?.status().running || loop.status().loopId !== message.loopId) {

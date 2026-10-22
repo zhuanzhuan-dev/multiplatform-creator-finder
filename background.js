@@ -14,6 +14,7 @@ import { sanitizeRaw } from "./lib/raw-sample.js";
 import { accountProfile } from "./lib/account-profile.js";
 import { launcherState, toolbarState, aggregateTaskState } from "./lib/launcher-state.js";
 import { contentSkipDecision } from "./lib/content-type.js";
+import { createDouyinIpLocationReader } from "./lib/douyin-ip-location.js";
 import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
 import { loadOutbox, writeOutboxChanges } from "./lib/outbox-store.js";
 import {
@@ -63,6 +64,7 @@ const COMPANY_SSO_REQUIRED_MESSAGE = "请先打开研究台完成公司登录，
 let initialized = null;
 const pendingPanelSelections = new Map();
 let state = structuredClone(INITIAL_STATE);
+const readDouyinIpLocation = createDouyinIpLocationReader({ waitForTab: waitForTabComplete });
 let settings = mergeSettings();
 let rules = mergeRules();
 let settingsDraft = null;
@@ -2514,6 +2516,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const save = configQueue.then(() => saveConfiguration(message));
         configQueue = save.catch(() => undefined);
         return save;
+      }
+      case "DRA_DOUYIN_PROFILE_IP": {
+        requireBoundContentTab(sender, message);
+        const { runId, loopId } = message;
+        const ipLocation = await readDouyinIpLocation({ profileUrl: message.profileUrl,
+          secUid: message.secUid, windowId: state.feedWindowId, runKey: `${runId}:${loopId}`,
+          isCurrent: () => state.status === 'running' && state.runId === runId && state.loopId === loopId });
+        return { ok: true, ipLocation };
       }
       case "DRA_OBSERVATION": {
         requireBoundContentTab(sender, message);

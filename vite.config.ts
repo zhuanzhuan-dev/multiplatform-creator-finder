@@ -43,6 +43,7 @@ function extensionRuntime(): Plugin {
     "lib/feigua-collection.js",
     "lib/platform-routes.js",
     "lib/douyin-page-parser.js",
+    "lib/douyin-ip-location.js",
     "src/content/douyin-recommend.ts",
     "src/core/platform-router.ts"
   ];
