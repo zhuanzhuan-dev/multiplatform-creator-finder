@@ -87,6 +87,17 @@ const browserMock = `<script>
   snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:"kuaishou",surface:"recommend",label:"快手推荐"},runId:"preview-ks",feedTabId:103}, {...snapshot.state,route:{platform:"bilibili",surface:"recommend",label:"B站首页推荐"},runId:"preview-bl",feedTabId:104,status:"idle"}, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}, {...snapshot.state,route:{platform:'xingtu',surface:'market',label:'星图达人广场'},runId:'preview-xt',feedTabId:105,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,stats:{...snapshot.state.stats,pagesCollected:12,matched:190,rejectedProfiles:4,duplicates:8},status:'paused',pauseReason:'演示：已暂停自动翻页'}];
   snapshot.feigua={pageCount:50,pageNumber:'50',finalized:false,candidates:[{name:'示例美食账号',followers:'12w'},{name:'示例旅行账号',followers:'8.5w'}]};
   snapshot.xingtu={pageCount:12,pageNumber:'12',finalized:false,candidates:[]};
+  // Deterministic, local-only fixtures for layout/zoom acceptance. No collector runs.
+  const responsivePreview = new URLSearchParams(location.search).has('responsive');
+  snapshot.tasks.push({...snapshot.tasks[2],route:{platform:'bilibili',surface:'popular',label:'B站综合热门'}});
+  if (responsivePreview) {
+    for (const task of snapshot.tasks) task.status = 'paused';
+    snapshot.rules.gameBlacklist.push('VeryLongKeywordWithoutSpacesForResponsiveLayoutVerification');
+    snapshot.feigua.candidates[0].videos = [{videoId:'preview-video',title:'用于布局验收的长视频标题：一次完整记录拍摄制作与发布过程',durationSeconds:120,metrics:{'播放':'123456789','点赞':'9876543','评论':'123456'}}];
+    snapshot.xingtu.candidates = [{name:'用于响应式布局验收的长名称达人账号',followers:'12345678',xingtuId:'1234567890123456789',tags:['美食','旅行'],prices:{'21-60秒视频':'123456'},metrics:{'预期CPM':'123.45'},city:'上海'}];
+    snapshot.decisionHistory = snapshot.state.recentDecisions.slice(0,3).map((item,index)=>({...item,id:'preview-'+index,authorId:'preview-author-'+index,videoId:'preview-video-'+index,sourcePlatform:'douyin',accountName:index===0?'用于响应式布局验收的很长达人昵称':item.accountName,caption:'用于响应式验收的视频标题与连续英文 LongVideoTitleWithoutSpacesForLayoutVerification',plays:123456789,likes:1234567,durationSeconds:125}));
+    snapshot.decisionHistoryTotal = snapshot.decisionHistory.length;
+  }
   const storageListeners = new Set();
   const previewStorageKey = "draPreviewStorage";
   const readStored = () => JSON.parse(localStorage.getItem(previewStorageKey) || "{}");
@@ -113,13 +124,21 @@ const browserMock = `<script>
       query: async () => [{ id: 101, windowId: 1, active: true, url: ${JSON.stringify(DOUYIN_RECOMMEND_URL)} }] },
     runtime: {
       lastError: null,
+      getURL: path => new URL("/" + path, location.origin).href,
       getManifest: () => (${JSON.stringify({ version: extensionManifest.version, version_name: extensionManifest.version_name })}),
-      sendMessage: (message, callback) => queueMicrotask(() => {
-        if (message.type !== "DRA_GET_STATUS") return callback({ ...snapshot, ok: true });
-        const state = snapshot.tasks.find(task => task.route?.platform === message.platform) || snapshot.state;
+      sendMessage: (message, callback) => new Promise(resolve => queueMicrotask(() => {
+        const reply = value => { callback?.(value); resolve(value); };
+        if (message.type === "DRA_DEBUG_STATUS") return reply({ok:true,enabled:false,samples:{count:0,bytes:0}});
+        if (message.type === "DRA_QUERY_HISTORY") {
+          const options = message.options || {};
+          const items = (snapshot.decisionHistory || []).filter(item => (!options.authorId || item.authorId === options.authorId) && (!options.query || (item.accountName + item.caption).includes(options.query)) && (!options.sourcePlatform || item.sourcePlatform === options.sourcePlatform));
+          return reply({ok:true,items,total:items.length,counts:{good:1,review:1,reject:1},runs:[{id:'preview-run',startedAt:new Date(now).toISOString()}],nextCursor:null,asOf:now});
+        }
+        if (message.type !== "DRA_GET_STATUS") return reply({ ...snapshot, ok: true });
+        const state = snapshot.tasks.find(task => message.platform === "bilibili-popular" ? task.route?.platform === "bilibili" && task.route?.surface === "popular" : task.route?.platform === message.platform && task.route?.surface !== "popular") || snapshot.state;
         const rules = ["bilibili", "bilibili-popular"].includes(message.platform) ? bilibiliRules : snapshot.rules;
-        callback({ ...snapshot, state, rules, configPlatform: state.route?.platform || "douyin" });
-      }),
+        reply({ ...snapshot, state, rules, configPlatform: message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
+      })),
       onMessage: { addListener() {}, removeListener() {} }
     },
     storage: {

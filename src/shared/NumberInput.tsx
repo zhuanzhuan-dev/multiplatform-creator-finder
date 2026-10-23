@@ -15,9 +15,9 @@ export function NumberInput({ value, disabled, min, max, step = "any", allowEmpt
       : min != null && value < Number(min) ? `最小为 ${min}`
         : max != null && value > Number(max) ? `最大为 ${max}`
           : step === "1" && !Number.isInteger(value) ? "请输入整数" : "";
-  return <>
+  return <span className="number-field">
     <input {...props} type="number" value={value} disabled={disabled} min={min} max={max} step={step}
       aria-invalid={Boolean(error)} aria-describedby={[props["aria-describedby"], error ? hintId : ""].filter(Boolean).join(" ") || undefined} />
     {error ? <span className="field-error" id={hintId}>{error}</span> : null}
-  </>;
+  </span>;
 }

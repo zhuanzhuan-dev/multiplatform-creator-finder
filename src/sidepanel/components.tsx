@@ -423,23 +423,25 @@ function PlayRuleList({ kind, title, hint, rows, disabled, onChange }: { kind: "
       <div className="setting-heading"><strong>{title}</strong><span>{hint}</span></div>
       {rows.map((row, index) => (
         <div className="play-rule-row" key={`${kind}-${index}`}>
-          <label className="play-rule-field">
-            <span className="play-rule-caption">播放</span>
-            <span className="play-rule-control">
-              <CompareSelect op={row.playsOp} disabled={disabled} label={`${title}第 ${index + 1} 条播放比较符`} onChange={(playsOp) => setRow(index, { playsOp })} />
-              <NumberInput className="play-rule-input" min="0" aria-label={`${title}第 ${index + 1} 条播放量`} value={row.plays} disabled={disabled} onChange={(event) => setRow(index, { plays: inputNumber(event.target.value) })} />
-            </span>
-          </label>
-          <label className="play-rule-field">
-            <span className="play-rule-caption">发布</span>
-            <span className="play-rule-control">
-              <CompareSelect op={row.daysOp} disabled={disabled} label={`${title}第 ${index + 1} 条发布比较符`} onChange={(daysOp) => setRow(index, { daysOp })} />
-              <span className="play-rule-days">
-                <NumberInput className="play-rule-input" min="0" aria-label={`${title}第 ${index + 1} 条发布天数`} value={row.days} disabled={disabled} onChange={(event) => setRow(index, { days: inputNumber(event.target.value) })} />
-                <span>天</span>
+          <div className="play-rule-fields">
+            <div className="play-rule-field">
+              <span className="play-rule-caption">播放</span>
+              <span className="play-rule-control">
+                <CompareSelect op={row.playsOp} disabled={disabled} label={`${title}第 ${index + 1} 条播放比较符`} onChange={(playsOp) => setRow(index, { playsOp })} />
+                <NumberInput className="play-rule-input" min="0" aria-label={`${title}第 ${index + 1} 条播放量`} value={row.plays} disabled={disabled} onChange={(event) => setRow(index, { plays: inputNumber(event.target.value) })} />
               </span>
-            </span>
-          </label>
+            </div>
+            <div className="play-rule-field">
+              <span className="play-rule-caption">发布</span>
+              <span className="play-rule-control">
+                <CompareSelect op={row.daysOp} disabled={disabled} label={`${title}第 ${index + 1} 条发布比较符`} onChange={(daysOp) => setRow(index, { daysOp })} />
+                <span className="play-rule-days">
+                  <NumberInput className="play-rule-input" min="0" aria-label={`${title}第 ${index + 1} 条发布天数`} value={row.days} disabled={disabled} onChange={(event) => setRow(index, { days: inputNumber(event.target.value) })} />
+                  <span>天</span>
+                </span>
+              </span>
+            </div>
+          </div>
           <button type="button" className="play-rule-remove" aria-label={`删除${title}规则 ${index + 1}`} disabled={disabled} onClick={() => onChange(rows.filter((_, position) => position !== index))}>×</button>
         </div>
       ))}
@@ -468,7 +470,7 @@ export function TermChips({ label, values, disabled, onChange }: { label: string
       <div className="term-list">
         {values.map((term) => (
           <span className="term-chip" key={term}>
-            {term}
+            <span>{term}</span>
             <button type="button" aria-label={`移除${term}`} disabled={disabled} onClick={() => onChange(values.filter((item) => item !== term))}>×</button>
           </span>
         ))}
