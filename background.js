@@ -816,6 +816,7 @@ function assertInputGeneration(tabId, loopId) {
 
 async function dispatchTrustedKey(tabId, requestedKey, loopId) {
   const keys = {
+    Escape: { key: "Escape", code: "Escape", keyCode: 27 },
     ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
     r: { key: "r", code: "KeyR", keyCode: 82 },
     x: { key: "x", code: "KeyX", keyCode: 88 }

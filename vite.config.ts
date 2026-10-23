@@ -44,6 +44,8 @@ function extensionRuntime(): Plugin {
     "lib/platform-routes.js",
     "lib/douyin-page-parser.js",
     "lib/douyin-ip-location.js",
+    "lib/douyin-profile-api.js",
+    "lib/douyin-recommendation.js",
     "src/content/douyin-recommend.ts",
     "src/core/platform-router.ts"
   ];

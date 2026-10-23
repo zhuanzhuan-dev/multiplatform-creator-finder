@@ -1,3 +1,4 @@
+import { recommendationState, recommendationAdvanced } from "../lib/douyin-recommendation.js";
 import { captureCurrentRaw, rawCaptureEnabled } from "./raw-capture.js";
 import { contentSkipDecision } from "../lib/content-type.js";
 import { evaluateVideoRules, evaluateCreatorRules } from "../lib/rule-engine.js";
@@ -53,6 +54,7 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
     let dwellPolicy = { mode: "fixed", fixedSeconds: 30, minSeconds: 10, typicalSeconds: 15, maxSeconds: 30 };
     let panelRecoveryAttempts = 3;
     let failureStreak = 0;
+    let currentRecommendation = null;
 
     function assertRunning() {
       if (abort.signal.aborted || !running) throw new Error("循环已取消");
@@ -146,14 +148,38 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
       return observation;
     }
 
+    async function ensureRecommendation() {
+      let state = recommendationState(document, parser);
+      if (state.mode === "recommendation") return state;
+      if (state.mode === "author") {
+        const restored = await sendRuntime({ type: "DRA_TRUSTED_KEY", key: "Escape" });
+        if (!restored?.ok) throw new Error(restored?.error || "退出作者作品播放失败");
+      }
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && running) {
+        const blocked = parser.parseCurrentFeed(document)?.blockedReason;
+        if (blocked) throw new Error(blocked);
+        await sleep(250);
+        state = recommendationState(document, parser);
+        if (state.mode === "recommendation") return state;
+      }
+      throw new Error("尚未恢复推荐播放器，等待重试");
+    }
+
     async function waitForNext(previousFingerprint, timeoutMs = 12_000) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline && running) {
         await sleep(400);
         const current = parser.parseCurrentFeed(document);
         if (current?.blockedReason) return { changed: false, blockedReason: current.blockedReason };
-        const fingerprint = observationFingerprint(current);
-        if (fingerprint && fingerprint !== previousFingerprint) return { changed: true, observation: current };
+        const state = recommendationState(document, parser);
+        if (state.mode === "author") {
+          await ensureRecommendation();
+          return { changed: false, reason: "已退出作者作品播放，重新推进推荐" };
+        }
+        if (recommendationAdvanced(currentRecommendation, state, previousFingerprint, observationFingerprint(current))) {
+          return { changed: true, observation: current };
+        }
       }
       return { changed: false };
     }
@@ -184,6 +210,7 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
       let profile = null;
       while (running && Date.now() < deadline) {
         assertRunning();
+        if (recommendationState(document, parser).mode !== "recommendation") throw new Error("读取资料时离开推荐播放，下一次自动恢复");
         const current = parser.parseCurrentFeed(document);
         if (current?.blockedReason) throw new Error(current.blockedReason);
         if (current && observationFingerprint(current) !== observationFingerprint(observation)) {
@@ -230,6 +257,34 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
       return openedByClick.matched
         ? { ok: true, ui: openedByClick.ui, method: "trusted-comment" }
         : { ok: false, reason: "真实点击评论入口后未出现 TA 的作品", ui: openedByClick.ui };
+    }
+
+    async function keepWorksPanelOpen() {
+      const opened = await openCurrentCreatorPanel();
+      if (!opened.ok) return opened;
+      if (!opened.ui.panelState?.selected) {
+        const clicked = await trustedClick(opened.ui.targets?.works);
+        if (!clicked?.ok) return { ok: false, reason: clicked?.error || "打开作品侧栏失败" };
+      }
+      return { ok: true };
+    }
+
+    async function collectProfileIp(profile, observation) {
+      const secUid = profile.secUid || observation.secUid;
+      const profileUrl = profile.profileUrl || observation.profileUrl;
+      const deadline = Date.now() + 2_000;
+      do {
+        const result = await pageCommand("GET_PROFILE_IP", { secUid }, 3_000);
+        const ip = result?.ipLocation;
+        if (ip?.secUid === secUid && ip.ipLocationProfileUrl === profileUrl
+          && ["available", "missing"].includes(ip.ipLocationStatus)) return ip;
+        if (Date.now() >= deadline) break;
+        await sleep(250);
+      } while (running);
+      // A response missed before the bridge loaded may still be read from the full homepage.
+      const result = await sendRuntime({ type: "DRA_DOUYIN_PROFILE_IP", secUid, profileUrl });
+      assertRunning();
+      return result?.ok ? result.ipLocation : null;
     }
 
     async function recoverCreatorPanel(observation) {
@@ -324,6 +379,7 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
     }
 
     async function performDecisionAction(action, previousFingerprint, beforeUrl) {
+      await ensureRecommendation();
       if (action === "not-interested") {
         const marked = await sendRuntime({ type: "DRA_TRUSTED_KEY", key: "r" }).catch((error) => ({ ok: false, error: error?.message || String(error) }));
         if (!marked?.ok) throw new Error(marked?.error || "标记不感兴趣失败（抖音 R 快捷键）");
@@ -416,6 +472,9 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
           return;
         }
 
+        currentRecommendation = await ensureRecommendation();
+        // Keep the normal recommendation sidebar open, including the first card of a new round.
+        await keepWorksPanelOpen();
         let observation = await waitForObservationHydration();
         if (observation?.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: observation.blockedReason });
@@ -455,11 +514,8 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
         // Only candidates that pass video and creator rules receive viewing time.
         const shouldDwell = videoDecision.matched && evaluateCreatorRules(profile, rules).matched;
         if (shouldDwell) {
-          const ip = await sendRuntime({ type: "DRA_DOUYIN_PROFILE_IP",
-            secUid: profile.secUid || observation.secUid,
-            profileUrl: profile.profileUrl || observation.profileUrl });
-          assertRunning();
-          if (ip?.ok && ip.ipLocation) profile = { ...profile, ...ip.ipLocation };
+          const ip = await collectProfileIp(profile, observation);
+          if (ip) profile = { ...profile, ...ip };
         }
         const targetDwellMs = shouldDwell ? (resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : sampleDwellSeconds(dwellPolicy) * 1_000) : 0;
         const waitUntil = shouldDwell && resumedDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
@@ -469,11 +525,18 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
         if (!running) return;
 
         await progress("submit");
+        if (recommendationState(document, parser).mode !== "recommendation") {
+          await ensureRecommendation();
+          throw new Error("停留期间进入作者作品播放，已恢复推荐后重新读取");
+        }
         const refreshed = shouldDwell ? await waitForObservationHydration(2_000) : null;
         if (refreshed?.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: refreshed.blockedReason });
           running = false;
           return;
+        }
+        if (refreshed && observationFingerprint(refreshed) !== previousFingerprint) {
+          throw new Error("停留期间推荐已切换，重新读取当前卡片");
         }
         if (refreshed && observationFingerprint(refreshed) === previousFingerprint) {
           observation = {
@@ -488,6 +551,11 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
 
         const dwellSeconds = Number(((Date.now() - tickStartedAt) / 1000).toFixed(1));
         await progress("submit", { actualDwellSeconds: dwellSeconds });
+        const submissionState = recommendationState(document, parser);
+        if (submissionState.mode !== "recommendation" || submissionState.card !== currentRecommendation.card
+          || (submissionState.videoId && currentRecommendation.videoId && submissionState.videoId !== currentRecommendation.videoId)) {
+          throw new Error("提交前播放来源或推荐卡片已变化，重新读取当前推荐");
+        }
         const beforeUrl = location.href;
         const result = await sendRuntime({
           type: "DRA_OBSERVATION",

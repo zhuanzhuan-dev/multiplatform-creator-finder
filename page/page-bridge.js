@@ -1,7 +1,10 @@
+import { installProfileIpCapture } from "../lib/douyin-profile-api.js";
 import { structuredFeedIdentity } from "../lib/structured-feed-identity.js";
 import { pageCardData } from "../lib/raw-sample.js";
 (function installDouyinPageBridge() {
   "use strict";
+
+  const readProfileIp = installProfileIpCapture(window);
 
   const CHANNEL = "DOUYIN_AUTO_FINDER_PAGE";
 
@@ -148,6 +151,7 @@ import { pageCardData } from "../lib/raw-sample.js";
     if (event.source !== window || event.data?.channel !== CHANNEL || event.data?.direction !== "request") return;
     const { id, command, payload = {} } = event.data;
     Promise.resolve().then(async () => {
+      if (command === "GET_PROFILE_IP") return { ok: true, ipLocation: readProfileIp(String(payload.secUid || "")) };
       if (command === "GET_FEED_IDENTITY") return structuredFeedIdentity(activeItem()?.element);
       if (command === "GET_FEED_RAW") return pageCardData(activeItem()?.element, String(payload.videoId || ""));
       if (command === "GET_CREATOR_PANEL_STATE") return creatorPanelUiState();
