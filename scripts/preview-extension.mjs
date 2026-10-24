@@ -73,6 +73,10 @@ const browserMock = `<script>
     outboxCount: 0,
     teamDestination: { name: "研究台 · No Swipe" }
   };
+  const ruleSyncPreview = new URLSearchParams(location.search).get('ruleSync');
+  if (ruleSyncPreview === 'error') snapshot.cloud.ruleSync = {pending:[],error:'invalid_session',syncedAt:''};
+  if (ruleSyncPreview === 'service') snapshot.cloud.ruleSync = {pending:[],error:'rule_sync_service_unavailable',syncedAt:''};
+  if (ruleSyncPreview === 'pending') snapshot.cloud.ruleSync = {pending:[{id:'preview-feedback',platform:'douyin',explanation:'删除误杀词，其他规则保持不变'}],error:'',syncedAt:new Date(now).toISOString()};
   const bilibiliRules = {
     ...snapshot.rules,
     platform: "bilibili",
@@ -134,10 +138,18 @@ const browserMock = `<script>
           const items = (snapshot.decisionHistory || []).filter(item => (!options.authorId || item.authorId === options.authorId) && (!options.query || (item.accountName + item.caption).includes(options.query)) && (!options.sourcePlatform || item.sourcePlatform === options.sourcePlatform));
           return reply({ok:true,items,total:items.length,counts:{good:1,review:1,reject:1},runs:[{id:'preview-run',startedAt:new Date(now).toISOString()}],nextCursor:null,asOf:now});
         }
+        if (message.type === "DRA_SYNC_RULES") return reply({ok:true,status:snapshot.cloud.ruleSync});
+        const configKey = "previewConfig:" + (message.platform && message.platform !== "auto" ? message.platform : "douyin");
+        if (message.type === "DRA_SAVE_CONFIG") {
+          const stored = readStored();
+          const config = {...stored[configKey], ...(message.settings ? {settings:message.settings} : {}), ...(message.rules ? {rules:message.rules} : {})};
+          localStorage.setItem(previewStorageKey, JSON.stringify({...stored, [configKey]:config}));
+          return reply({...snapshot, ...config, ok:true, configPlatform:message.platform || "douyin", settingsDraft:null, problems:[]});
+        }
         if (message.type !== "DRA_GET_STATUS") return reply({ ...snapshot, ok: true });
         const state = snapshot.tasks.find(task => message.platform === "bilibili-popular" ? task.route?.platform === "bilibili" && task.route?.surface === "popular" : task.route?.platform === message.platform && task.route?.surface !== "popular") || snapshot.state;
         const rules = ["bilibili", "bilibili-popular"].includes(message.platform) ? bilibiliRules : snapshot.rules;
-        reply({ ...snapshot, state, rules, configPlatform: message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
+        reply({ ...snapshot, state, rules, ...readStored()[configKey], configPlatform: message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
       })),
       onMessage: { addListener() {}, removeListener() {} }
     },

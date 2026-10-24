@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { errorMessage } from '../shared/error-message';
 import { useEffect, useState } from 'react';
 import { canResumeRun, elapsedRunMs } from '../../lib/run-limits.js';
@@ -8,8 +9,8 @@ import { ScheduleEditor, TermChips } from './components';
 import type { useExtensionState } from './use-extension-state';
 import { settingsDraft, type Settings, type SettingsDraft } from './types';
 
-type Props = { extension: ReturnType<typeof useExtensionState>; draft: SettingsDraft; now: number };
-export function FeiguaTaskPage({extension, draft, now}: Props) {
+type Props = { ruleSyncStatus?: ReactNode; extension: ReturnType<typeof useExtensionState>; draft: SettingsDraft; now: number };
+export function FeiguaTaskPage({ruleSyncStatus,extension, draft, now}: Props) {
   const snapshot=extension.snapshot!;
   const state=snapshot.state || {};
   const details=snapshot.feigua;
@@ -91,6 +92,7 @@ export function FeiguaTaskPage({extension, draft, now}: Props) {
       </form>
     } rules={
       <form className="disclosure-body rules-form" onSubmit={event=>{event.preventDefault();void save();}}>
+        {ruleSyncStatus}
         <section className="setting-group">
           <div className="setting-heading"><strong>想找的内容</strong><span>命中正向词 → 规则命中</span></div>
           <TermChips label="正向关键词" values={positiveKeywords} disabled={active || saving} onChange={setPositiveKeywords} />

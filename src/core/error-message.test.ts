@@ -16,3 +16,13 @@ test('failures display Chinese while preserving HTTP and error codes', () => {
   assert.equal(errorMessage('S · AI内容 · Vlog'), 'S · AI内容 · Vlog');
   assert.equal(errorMessage(''), '');
 });
+
+test('rule sync asks for pairing only after confirmed device authorization failure', () => {
+  for (const code of ['invalid_session','rule_sync_auth_unconfirmed','rule_sync_endpoint_unavailable']) {
+    assert.doesNotMatch(errorMessage(code), /授权已失效|请.*重新连接/);
+  }
+  assert.match(errorMessage('rule_sync_service_unavailable'), /连接有效.*无需重新连接/);
+  assert.match(errorMessage('device_authorization_invalid'), /授权已失效/);
+  assert.match(errorMessage('device_token_revoked'), /授权已被撤销/);
+  assert.match(errorMessage('company_sso_required'), /配对信息已保留/);
+});

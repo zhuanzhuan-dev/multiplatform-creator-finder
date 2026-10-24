@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { errorMessage } from '../shared/error-message';
 import { useEffect, useState } from 'react';
 import { canResumeRun, elapsedRunMs } from '../../lib/run-limits.js';
@@ -7,8 +8,8 @@ import { ScheduleEditor, TermChips } from './components';
 import type { useExtensionState } from './use-extension-state';
 import { settingsDraft, type SettingsDraft } from './types';
 
-type Props = { extension: ReturnType<typeof useExtensionState>; draft: SettingsDraft; now: number };
-export function XingtuTaskPage({extension, draft, now}: Props) {
+type Props = { ruleSyncStatus?: ReactNode; extension: ReturnType<typeof useExtensionState>; draft: SettingsDraft; now: number };
+export function XingtuTaskPage({ruleSyncStatus,extension, draft, now}: Props) {
   void draft;
   const snapshot=extension.snapshot!;
   const state=snapshot.state || {};
@@ -80,6 +81,7 @@ export function XingtuTaskPage({extension, draft, now}: Props) {
         <label className="field">翻页最长等待（秒）<input type="number" min={minDelay || '1'} max="30" step="0.1" value={maxDelay} disabled={active || saving} onChange={event=>setMaxDelay(event.target.value)} required /></label>
         <p className="field-note">每页保存后在区间内随机等待，再翻下一页；另需等待列表加载。达到每批页数后自动暂停，建议休息至少 3 小时，可手动提前继续。到达当前筛选末页时结束本轮。随机等待仍有触发访问限制的风险。</p>
         <ScheduleEditor draft={scheduleDraft} disabled={active || saving} onChange={setScheduleDraft} platform="xingtu" />
+        {ruleSyncStatus}
         <TermChips label="整账号排除词" values={keywords} disabled={active || saving} onChange={setKeywords} />
         <p className="field-note">匹配达人卡片的昵称、抖音号、标签及卡片原文。任意字段包含一个排除词，就排除整个账号。点击＋添加，× 删除；修改在新一轮生效，暂停任务继续使用原规则。</p>
         <button type="submit" disabled={active || saving}>{saving?'保存中…':'保存星图设置'}</button><p className="field-note" role="status">{errorMessage(notice)}</p>

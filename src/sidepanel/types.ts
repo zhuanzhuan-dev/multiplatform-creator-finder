@@ -132,6 +132,7 @@ export interface Pairing {
 }
 
 export interface CloudState {
+  ruleSync?: {pending?: {id:string;platform:string;explanation:string}[];last?:{id:string;platform:string;status:string;error?:string};error?:string;syncedAt?:string};
   account?: { id: string; name: string; email: string } | null;
   connected?: boolean;
   expired?: boolean;
@@ -263,6 +264,7 @@ export interface RuleSettings {
   };
   positiveCategories: CategoryRule[];
   gameBlacklist: string[];
+  contentOnlyExclusionTerms: string[];
   contentBlacklist?: string[];
   excludeTnames?: string[];
   playRules?: {
@@ -293,6 +295,7 @@ const FALLBACK_RULES: RuleSettings = {
   },
   positiveCategories: [],
   gameBlacklist: [],
+  contentOnlyExclusionTerms: [],
   feiguaKeywords: [...FEIGUA_KEYWORDS],
   xingtuKeywords: [...XINGTU_KEYWORDS],
   riskGroups: []
@@ -372,6 +375,7 @@ export function rulesDraft(value: unknown): RuleSettings {
         : (isBilibili ? (BILIBILI_DEFAULT_PARTITIONS[String(category.id || "")] || []) : undefined),
       enabled: category.enabled !== false
     })) : FALLBACK_RULES.positiveCategories,
+    contentOnlyExclusionTerms: Array.isArray(source.contentOnlyExclusionTerms) ? source.contentOnlyExclusionTerms.map(String) : [],
     gameBlacklist: Array.isArray(source.gameBlacklist) ? source.gameBlacklist.map(String) : [],
     contentBlacklist: Array.isArray(source.contentBlacklist) ? source.contentBlacklist.map(String) : [],
     excludeTnames: Array.isArray(source.excludeTnames) ? source.excludeTnames.map(String) : [],

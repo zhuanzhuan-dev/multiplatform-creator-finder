@@ -5,6 +5,12 @@ export function errorMessage(value: unknown): string {
   const codes = [...new Set(raw.match(/\bHTTP\s*\d{3}\b|\b(?:ERR_[A-Z_]+|[A-Z][A-Z0-9]*_[A-Z0-9_]+)\b/gi) || [])];
   const suffix = codes.length ? `（错误码：${codes.join('、')}）` : '';
   const rules: [RegExp, string][] = [
+    [/^rule_sync_endpoint_unavailable$/, '规则同步接口暂不可用，已保留原连接。请等待研究台服务更新后重试。'],
+    [/^rule_sync_service_unavailable$/, '研究台连接有效，规则同步服务尚未就绪或接口不可用。无需重新连接，服务恢复后会自动重试。'],
+    [/^rule_sync_auth_unconfirmed$|^invalid_session$/, '暂时无法确认规则同步授权，已保留原连接。请稍后重试同步。'],
+    [/^device_authorization_invalid$/, '设备授权已失效，请在设置中重新连接研究台。'],
+    [/^device_token_revoked$/, '设备授权已被撤销，请在设置中重新连接研究台。'],
+    [/^company_sso_required$/, '公司网页登录已失效，请打开研究台完成登录后重试；插件配对信息已保留。'],
     [/连续重试后仍无法读取.*TA 的作品侧栏|达人作品列表加载失败/, '达人作品列表加载失败。请检查网络连接；如正在使用代理，可尝试关闭或切换线路，刷新页面后重试。'],
     [/failed to fetch|networkerror|network request failed|net::|load failed/i, '网络连接失败，请检查网络；如使用代理，可尝试关闭或切换线路后重试。'],
     [/timeout|timed out|aborterror|operation was aborted/i, '请求超时或已中断，请检查网络和页面加载情况后重试。'],

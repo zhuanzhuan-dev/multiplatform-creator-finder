@@ -642,8 +642,10 @@ export function AdvancedRulesPanel({ draft, disabled, onChange, onSave, engageme
 
         <section className="setting-group" aria-labelledby="blacklistRulesTitle">
           <div className="setting-heading"><strong id="blacklistRulesTitle">不需要的内容</strong><span>包含排除词时跳过</span></div>
-          <TermChips label="排除关键词" values={draft.gameBlacklist} disabled={disabled} onChange={(gameBlacklist) => onChange({ ...draft, gameBlacklist })} />
-          <p className="field-note">匹配范围与上方“想找的内容”一致。视频字段命中时跳过该视频；账号资料命中时淘汰该账号本次候选。排除词优先于正向关键词。</p>
+          <TermChips label="排除关键词" values={draft.gameBlacklist} disabled={disabled} onChange={(gameBlacklist) => onChange({ ...draft, gameBlacklist, contentOnlyExclusionTerms: draft.contentOnlyExclusionTerms.filter(word => gameBlacklist.includes(word)) })} />
+          <TermChips label="其中仅匹配作品的词" values={draft.contentOnlyExclusionTerms} disabled={disabled} onChange={(contentOnlyExclusionTerms) => onChange({ ...draft, contentOnlyExclusionTerms })} />
+          <p className="field-note">这些词须同时在排除关键词中；仅按作品文案和标签判断，昵称与简介中的命中不用于排除。</p>
+          <p className="field-note">其余排除词沿用“想找的内容”的匹配范围。视频字段命中时跳过该视频；账号资料命中时淘汰该账号本次候选。排除词优先于正向关键词。</p>
         </section>
 
         {engagement}

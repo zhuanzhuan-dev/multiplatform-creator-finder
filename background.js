@@ -1,3 +1,4 @@
+import { createRuleSync } from "./lib/rule-sync.js";
 import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './lib/kuaishou-task.js';
 import { createBilibiliRuntime, splitLegacyBilibiliStorage, BILIBILI_ALARM, BILIBILI_STOP_ALARM, BILIBILI_POPULAR_ALARM, BILIBILI_POPULAR_STOP_ALARM } from './lib/bilibili-task.js';
 import { bilibiliFeedbackFields } from './lib/bilibili-api.js';
@@ -135,36 +136,42 @@ let uploadDrainInFlight = null;
 let uploadScheduling = Promise.resolve();
 let cloudAuth = null;
 let pairing = null;
+const ruleSync = createRuleSync({ storage:chrome.storage.local, auth:()=>cloudAuth,
+  request:(token,body)=>cloudClient.syncRules(token,body,pluginVersion()), getRules:platform=>configurationFor(platform).rules,
+  saveRules:(platform,next)=>saveConfiguration({platform,rules:next}) });
+async function prepareFeedbackRules(platform) {
+  const work=configQueue.then(()=>ruleSync.beforeStart(platform));configQueue=work.catch(()=>undefined);await work;
+}
 const runWaits = createRunWaits();
 let watchdogInFlight = null;
 
 
 const feigua = createFeiguaRuntime({
-  settings:()=>settings, rules:()=>rules, authorize:checkCloudConnection,
+  settings:()=>settings, rules:()=>rules, authorize:checkCloudConnection, beforeStart:()=>prepareFeedbackRules("feigua"),
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload:requestUpload,
-  savePage:async(page,runId,legacy=false)=>{
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy})));
+  savePage:async(page,runId,legacy=false,captureRules=null)=>{
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy,...(!legacy && captureRules?{ruleContext:{platform:"feigua",rules:structuredClone(captureRules),capturedAt:page.capturedAt}}:{})})));
     void requestUpload();
     return items;
   }
 });
 const xingtu = createXingtuRuntime({
-  settings:()=>xingtuConfig.settings, rules:()=>xingtuConfig.rules, authorize:checkCloudConnection,
+  settings:()=>xingtuConfig.settings, rules:()=>xingtuConfig.rules, authorize:checkCloudConnection, beforeStart:()=>prepareFeedbackRules("xingtu"),
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload:requestUpload,
-  savePage:async(page,runId,legacy=false)=>{
-    const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,"automatic"),uploadEligible:!legacy && /^\d{1,30}$/.test(String(row.xingtuId || ''))})));
+  savePage:async(page,runId,legacy=false,captureRules=null)=>{
+    const items=await saveObservations(page.rows.map(row=>({...normalizeXingtuObservation(row,page,runId,"automatic"),uploadEligible:!legacy && /^\d{1,30}$/.test(String(row.xingtuId || '')),...(!legacy && captureRules?{ruleContext:{platform:"xingtu",rules:structuredClone(captureRules),capturedAt:page.capturedAt}}:{})})));
     void requestUpload();
     return items;
   }
 });
 const kuaishou = createKuaishouRuntime({
-  settings:()=>kuaishouConfig.settings,rules:()=>kuaishouConfig.rules,authorize:checkCloudConnection,
+  settings:()=>kuaishouConfig.settings,rules:()=>kuaishouConfig.rules,authorize:checkCloudConnection,beforeStart:()=>prepareFeedbackRules("kuaishou"),
   ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
   persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
@@ -177,7 +184,7 @@ const kuaishou = createKuaishouRuntime({
     Object.assign(payload.rpa_feedback,{source:'kuaishou-recommend',account_platform:'kuaishou',kuaishou_user_id:observation.authorId,
       kuaishou_id:profile?.kuaishouId || '',kuaishou_handle_source:profile?.kuaishouId?'profile_uid_text':null,
       kuaishou_profile_read:Boolean(profile),no_profile_navigation:false,review_required:Boolean(decision.needsReview)});
-    addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner});
+    addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner,captureRules:true});
     await persistWorkData();
   }
 });
@@ -192,13 +199,13 @@ function collectBilibili(observation,profile,decision,owner) {
     Object.assign(payload.rpa_feedback,{source:observation.feedSurface==='popular'?'bilibili-popular':'bilibili-web-recommend',account_platform:'bilibili',bilibili_mid:observation.authorId,
       bilibili_bvid:observation.videoId || '',no_profile_navigation:true,review_required:Boolean(decision.needsReview),
       ...bilibiliFeedbackFields(observation, profile)});
-    addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner});
+    addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner,captureRules:true});
     await persistWorkData();
   })();
 }
 function createBilibiliSurfaceRuntime(surface, config) {
   return createBilibiliRuntime({
-    settings:()=>config().settings,rules:()=>config().rules,authorize:checkCloudConnection,
+    settings:()=>config().settings,rules:()=>config().rules,authorize:checkCloudConnection,beforeStart:()=>prepareFeedbackRules(surface === "popular" ? "bilibili-popular" : "bilibili"),
     ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
     persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
     persistProgress:()=>persistTaskProgress((surface === 'popular' ? bilibiliPopular : bilibili).progressStorage()),
@@ -400,6 +407,7 @@ async function initialize() {
     outbox = await loadOutbox(legacyOutbox);
     await chrome.alarms.create("dra-observations-cleanup", {periodInMinutes:60});
     await cleanupStoredObservations();
+    await chrome.alarms.create("dra-rule-sync",{periodInMinutes:1});
     cloudAuth = saved[STORAGE_KEYS.cloudAuth] && typeof saved[STORAGE_KEYS.cloudAuth] === "object"
       ? saved[STORAGE_KEYS.cloudAuth]
       : null;
@@ -601,8 +609,10 @@ async function withXingtuCreatorDetails(items) {
   return items.map(item=>creators[item.id]?{...item,xingtuCreator:creators[item.id]}:item);
 }
 
-function addOutbox(status, payload, error = "", { transitionPending = false, owner = state } = {}) {
+function addOutbox(status, payload, error = "", { transitionPending = false, owner = state, captureRules = false } = {}) {
   reserveQueue(1);
+  const configPlatform=taskConfigPlatform(owner);
+  if (captureRules && payload?.rpa_feedback) payload.rpa_feedback.rule_context={platform:configPlatform, rules:structuredClone(owner.runRules || configurationFor(configPlatform).rules), capturedAt:new Date().toISOString()};
   const item = {
     id: payload?.record_id || crypto.randomUUID(),
     status,
@@ -625,6 +635,7 @@ function pluginVersion() {
 
 function cloudStatusSnapshot() {
   return {
+    ruleSync: ruleSync.status(),
     connected: Boolean(cloudAuth?.device_token) && !cloudAuth?.expired,
     expired: Boolean(cloudAuth?.expired),
     userId: cloudAuth?.user_id || "",
@@ -691,11 +702,11 @@ function observationRecord(observation, profile, { isRelevant, decision, action,
 async function enqueueObservation(record) {
   let item;
   if (settings.dryRun || !settings.cloud?.enabled) {
-    item = addOutbox(settings.dryRun ? "dry-run" : "cloud-disabled", record, "", { transitionPending: true });
+    item = addOutbox(settings.dryRun ? "dry-run" : "cloud-disabled", record, "", { transitionPending: true, captureRules: true });
   } else if (!cloudAuth?.device_token) {
-    item = addOutbox("write-error", record, "尚未连接研究台", { transitionPending: true });
+    item = addOutbox("write-error", record, "尚未连接研究台", { transitionPending: true, captureRules: true });
   } else {
-    item = addOutbox("pending", record, "", { transitionPending: true });
+    item = addOutbox("pending", record, "", { transitionPending: true, captureRules: true });
   }
   return { queued: true, recordId: item.id };
 }
@@ -1791,6 +1802,7 @@ async function startRun({ trigger = "manual", scheduledFor = null, tabId = null 
   if (!isActiveRunStatus() && state.createdByExtension && state.feedTabId !== requestedTab.id) {
     await chrome.tabs.remove(state.feedTabId).catch(() => undefined);
   }
+  await prepareFeedbackRules("douyin");
   const lastScheduleAt = state.lastScheduleAt;
   const lastScheduleResult = state.lastScheduleResult;
   state = {
@@ -2122,6 +2134,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if(alarm.name === "dra-rule-sync") initialize().then(()=>ruleSync.sync()).catch(()=>undefined);
   if (alarm.name === "dra-observations-cleanup") {
     initialize().then(()=>cleanupStoredObservations()).then(()=>chrome.runtime.sendMessage({type:"DRA_STATUS_CHANGED"})).catch(()=>undefined);
   }
@@ -2513,6 +2526,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.platform === "xingtu") return {ok:true,state:await xingtu.stop()};
         if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");
         return { ok: true, state: await stopRun() };
+      case "DRA_SYNC_RULES":
+        await ruleSync.sync(); return {ok:true,status:ruleSync.status()};
       case "DRA_SAVE_CONFIG": {
         const save = configQueue.then(() => saveConfiguration(message));
         configQueue = save.catch(() => undefined);
@@ -2590,7 +2605,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 initialize().then(() => Promise.all([
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }),
-  configureOpenTabSidePanels()
+  configureOpenTabSidePanels(),
+  ruleSync.sync()
 ])).catch(() => undefined);
 
 function requireFeiguaSender(sender) {

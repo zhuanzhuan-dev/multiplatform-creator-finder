@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { CloudPanel, RecentDecisions } from "./components";
 import { rulesDraft, settingsDraft } from "./types";
 import { ThemePicker } from "../shared/ThemePicker";
+import { RuleSyncStatus } from "./RuleSyncStatus";
 import { PreferencesMenu } from "./PreferencesMenu";
 import { useButtonGlow } from "../shared/useButtonGlow";
 import { useExtensionState } from "./use-extension-state";
@@ -28,6 +29,7 @@ export default function App() {
   const [draftReady, setDraftReady] = useState("");
   const [ruleDraft, setRuleDraft] = useState(rulesDraft(null));
   const formCache = useRef(new Map<string, {draft:ReturnType<typeof settingsDraft>;rules:ReturnType<typeof rulesDraft>}>());
+  const previousSavedRules = useRef(new Map<string,string>());
   const snapshot = extension.snapshot;
   const state = snapshot?.state || {};
   const active = state.status === "starting" || state.status === "running";
@@ -51,7 +53,16 @@ export default function App() {
   if (draftReady === configPlatform) formCache.current.set(configPlatform,{draft,rules:ruleDraft});
   const savedRules = JSON.stringify(snapshot?.rules);
   useEffect(() => {
-    if (savedRules) setRuleDraft(formCache.current.get(configPlatform)?.rules || rulesDraft(JSON.parse(savedRules)));
+    if (!savedRules) return;
+    const incoming = rulesDraft(JSON.parse(savedRules));
+    const cached = formCache.current.get(configPlatform);
+    const previous = previousSavedRules.current.get(configPlatform);
+    // Refresh a clean form after remote adoption; preserve unsaved manual edits.
+    const clean = !cached || (previous !== undefined && JSON.stringify(cached.rules) === previous);
+    const next = clean ? incoming : cached.rules;
+    previousSavedRules.current.set(configPlatform, JSON.stringify(incoming));
+    if (cached) formCache.current.set(configPlatform, {...cached, rules:next});
+    setRuleDraft(next);
   }, [configPlatform, savedRules]);
 
   if (!snapshot || draftReady !== configPlatform) {
@@ -59,6 +70,7 @@ export default function App() {
   }
 
   const cloudPanel = <CloudPanel snapshot={snapshot} checking={extension.bridgeChecking || extension.connecting} onCheck={() => void extension.checkCloud()} onConnect={() => void extension.connectCloud()} onDisconnect={() => void extension.disconnectCloud()} />;
+  const ruleSyncStatus = <RuleSyncStatus sync={snapshot.cloud?.ruleSync} platform={configPlatform} />;
   const connected = snapshot.cloud?.connected && snapshot.cloud?.pairing?.status !== "pending";
   return (
     <main>
@@ -75,9 +87,9 @@ export default function App() {
       {!connected ? cloudPanel : <div className="connection-summary">研究台已连接 · 结果自动同步</div>}
       {draft.dryRun ? <p className="test-mode-note">抖音、快手与 B 站新任务使用本地测试模式；飞瓜与星图继续自动上传研究台</p> : null}
       {extension.selectedPlatform!=='auto' ? <p className="field-note">正在手动查看{({feigua:'飞瓜',xingtu:'星图',kuaishou:'快手',bilibili:'B站首页','bilibili-popular':'B站热门',douyin:'抖音'} as Record<string,string>)[extension.selectedPlatform] || '所选'}任务，当前网页不会改变。</p> : null}
-      {state.route?.platform === 'feigua' ? <FeiguaTaskPage extension={extension} draft={draft} now={now} />
-        : state.route?.platform === 'xingtu' ? <XingtuTaskPage extension={extension} draft={draft} now={now} />
-        : ['douyin','kuaishou','bilibili'].includes(state.route?.platform || '') || ['bilibili','bilibili-popular'].includes(extension.selectedPlatform) ? <DouyinTaskPage extension={extension} now={now} draft={draft} setDraft={setDraft} ruleDraft={ruleDraft} setRuleDraft={setRuleDraft} configurationLocked={configurationLocked} connected={connected} /> : <section className="feigua-task-card"><h2>选择采集平台</h2><p>当前页面尚未适配。通过上方任务选择查看抖音、快手、B站、飞瓜或星图，再打开对应采集页。</p></section>}
+      {state.route?.platform === 'feigua' ? <FeiguaTaskPage ruleSyncStatus={ruleSyncStatus} extension={extension} draft={draft} now={now} />
+        : state.route?.platform === 'xingtu' ? <XingtuTaskPage ruleSyncStatus={ruleSyncStatus} extension={extension} draft={draft} now={now} />
+        : ['douyin','kuaishou','bilibili'].includes(state.route?.platform || '') || ['bilibili','bilibili-popular'].includes(extension.selectedPlatform) ? <DouyinTaskPage ruleSyncStatus={ruleSyncStatus} extension={extension} now={now} draft={draft} setDraft={setDraft} ruleDraft={ruleDraft} setRuleDraft={setRuleDraft} configurationLocked={configurationLocked} connected={connected} /> : <section className="feigua-task-card"><h2>选择采集平台</h2><p>当前页面尚未适配。通过上方任务选择查看抖音、快手、B站、飞瓜或星图，再打开对应采集页。</p></section>}
       {!['douyin','kuaishou','bilibili'].includes(state.route?.platform || '') && !['bilibili','bilibili-popular'].includes(extension.selectedPlatform) ? <section className="feigua-task-card"><RecentDecisions now={now} history={snapshot.decisionHistory} total={snapshot.decisionHistoryTotal} xingtuCandidates={state.route?.platform === 'xingtu' ? snapshot.xingtu?.candidates : undefined} xingtuCandidateTotal={state.route?.platform === 'xingtu' ? state.stats?.matched : undefined} xingtuFinalized={state.route?.platform === 'xingtu' ? snapshot.xingtu?.finalized : undefined} xingtuHistoryDetailsReady={snapshot.xingtu?.historyDetailsReady} />
         <button onClick={()=>{void sendRuntime<{ok:boolean;records:unknown[]}>({type:'DRA_EXPORT_OBSERVATIONS'}).then(result=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.records,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`采集观察-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(error=>window.alert(errorMessage(error)));}}>导出本地完整观察</button>
       </section> : null}
