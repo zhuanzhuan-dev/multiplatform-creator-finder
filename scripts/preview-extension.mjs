@@ -128,7 +128,7 @@ const browserMock = `<script>
     snapshot.rules.gameBlacklist.push('VeryLongKeywordWithoutSpacesForResponsiveLayoutVerification');
     snapshot.feigua.candidates[0].videos = [{videoId:'preview-video',title:'用于布局验收的长视频标题：一次完整记录拍摄制作与发布过程',durationSeconds:120,metrics:{'播放':'123456789','点赞':'9876543','评论':'123456'}}];
     snapshot.xingtu.candidates = [{name:'用于响应式布局验收的长名称达人账号',followers:'12345678',xingtuId:'1234567890123456789',tags:['美食','旅行'],prices:{'21-60秒视频':'123456'},metrics:{'预期CPM':'123.45'},city:'上海'}];
-    snapshot.decisionHistory = snapshot.state.recentDecisions.slice(0,3).map((item,index)=>({...item,id:'preview-'+index,authorId:'preview-author-'+index,videoId:'preview-video-'+index,sourcePlatform:'douyin',accountName:index===0?'用于响应式布局验收的很长达人昵称':item.accountName,caption:'用于响应式验收的视频标题与连续英文 LongVideoTitleWithoutSpacesForLayoutVerification',plays:123456789,likes:1234567,durationSeconds:125}));
+    snapshot.decisionHistory = snapshot.state.recentDecisions.slice(0,3).map((item,index)=>({...item,id:'preview-'+index,authorId:'preview-author-'+index,videoId:'preview-video-'+index,sourcePlatform:'douyin',ipLocation:index===0?'上海':null,ipLocationStatus:index===0?'available':'missing',ipLocationCapturedAt:new Date(now).toISOString(),accountName:index===0?'用于响应式布局验收的很长达人昵称':item.accountName,caption:'用于响应式验收的视频标题与连续英文 LongVideoTitleWithoutSpacesForLayoutVerification',plays:123456789,likes:1234567,durationSeconds:125}));
     snapshot.decisionHistoryTotal = snapshot.decisionHistory.length;
   }
   const ruleMatchMode = new URLSearchParams(location.search).has('rule-matches');

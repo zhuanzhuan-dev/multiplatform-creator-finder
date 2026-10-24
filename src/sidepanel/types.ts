@@ -28,6 +28,10 @@ export interface Decision {
   reasons?: string[];
   ruleMatch?: {taskName: string; ruleName: string; matchedItems: string[]} | null;
   accountName?: string;
+  ipLocation?: string | null;
+  ipLocationStatus?: string | null;
+  ipLocationSource?: string | null;
+  ipLocationCapturedAt?: string | null;
   tname?: string;
   avatarUrl?: string;
   profileUrl?: string;
@@ -123,6 +127,7 @@ export interface Settings {
   target?: RunTarget;
   keepSystemAwake?: boolean;
   markRejectedNotInterested?: boolean;
+  allowProfileIpFallback?: boolean;
   dryRun?: boolean;
   cloud?: { enabled?: boolean };
   schedule?: ScheduleSettings;
@@ -184,6 +189,7 @@ export interface SettingsDraft {
   targetMaxItems: number | "";
   keepSystemAwake: boolean;
   markRejectedNotInterested: boolean;
+  allowProfileIpFallback: boolean;
   dryRun: boolean;
   scheduleEnabled: boolean;
   scheduleWeekdays: number[];
@@ -213,6 +219,7 @@ export function settingsDraft(settings: EditableNumbers<Settings> = {}): Setting
     targetMaxItems: settings.target?.maxItems ?? 100,
     keepSystemAwake: settings.keepSystemAwake !== false,
     markRejectedNotInterested: settings.markRejectedNotInterested !== false,
+    allowProfileIpFallback: settings.allowProfileIpFallback === true,
     dryRun: Boolean(settings.dryRun),
     scheduleEnabled: settings.schedule?.enabled !== false,
     scheduleWeekdays: settings.schedule?.weekdays ?? [2, 3, 4, 5, 6],

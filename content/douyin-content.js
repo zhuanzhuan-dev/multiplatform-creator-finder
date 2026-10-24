@@ -281,6 +281,8 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
         if (Date.now() >= deadline) break;
         await sleep(250);
       } while (running);
+      // Opening a full homepage is optional; a missing IP never blocks collection.
+      if (settings.allowProfileIpFallback !== true) return null;
       // A response missed before the bridge loaded may still be read from the full homepage.
       const result = await sendRuntime({ type: "DRA_DOUYIN_PROFILE_IP", secUid, profileUrl });
       assertRunning();

@@ -1,3 +1,4 @@
+import { DecisionIpLocation } from '../shared/DecisionIpLocation';
 import { DecisionRuleMatch } from '../shared/DecisionRuleMatch';
 import { errorMessage } from '../shared/error-message';
 import { useEffect, useRef, useState } from 'react';
@@ -63,7 +64,7 @@ export function DecisionsPage() {
         <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
           <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
           <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
-          <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><span className="creator-copy"><strong>{decision.accountName || '未识别账号'}</strong>{decision.tname ? <small>{decision.tname}</small> : null}</span></span></td>
+          <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><span className="creator-copy"><strong>{decision.accountName || '未识别账号'}</strong><DecisionIpLocation decision={decision} />{decision.tname ? <small>{decision.tname}</small> : null}</span></span></td>
           <td data-label="采集内容" className="video-cell">
             {decision.sourcePlatform === 'xingtu' ? <div className="video-summary"><strong>达人资料</strong>{decision.authorId ? <span>星图 ID：{decision.authorId}</span> : null}{decision.xingtuCreator ? <>
               <span>{[decision.xingtuCreator.followers && `粉丝 ${decision.xingtuCreator.followers}`,decision.xingtuCreator.metrics?.['预期CPM'] && `预期CPM ${decision.xingtuCreator.metrics['预期CPM']}`].filter(Boolean).join(' · ') || '星图未提供粉丝量和预期CPM'}</span>

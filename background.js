@@ -1,3 +1,4 @@
+import { decisionIpFields } from "./lib/decision-history.js";
 import { captureRuleMatch } from "./lib/rule-match.js";
 import { createRuleSync } from "./lib/rule-sync.js";
 import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './lib/kuaishou-task.js';
@@ -607,6 +608,7 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
     reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean) : [],
     ruleMatch: captureRuleMatch(decision, owner, sourcePlatform),
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
+    ...decisionIpFields(profile),
     tname: String(observation.tname || "").slice(0, 80),
     avatarUrl: profile?.avatarUrl || observation.avatarUrl || decision.avatarUrl || "",
     profileUrl: profile?.profileUrl || observation.profileUrl || decision.profileUrl || "",
@@ -2590,6 +2592,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "DRA_DOUYIN_PROFILE_IP": {
         requireBoundContentTab(sender, message);
+        if (settings.allowProfileIpFallback !== true) return { ok: true, ipLocation: null };
         const { runId, loopId } = message;
         const ipLocation = await readDouyinIpLocation({ profileUrl: message.profileUrl,
           secUid: message.secUid, windowId: state.feedWindowId, runKey: `${runId}:${loopId}`,

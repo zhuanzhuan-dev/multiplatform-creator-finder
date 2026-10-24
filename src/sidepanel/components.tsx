@@ -1,3 +1,4 @@
+import { DecisionIpLocation } from '../shared/DecisionIpLocation';
 import { DecisionRuleMatch } from '../shared/DecisionRuleMatch';
 import { ScoringRulesEditor } from './ScoringRulesEditor';
 import { errorMessage } from '../shared/error-message';
@@ -144,6 +145,7 @@ export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates
                     <span className={`decision-label ${meta.tone}`}>{meta.label}</span>
                     <AccountVideosControl decision={decision} now={now} />
                   </div>
+                  <div className="decision-reason"><DecisionIpLocation decision={decision} /></div>
                   <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)}</span></div>
                   {decision.code === 'XINGTU_OBSERVED' ? <div className="decision-reason">{xingtuHistoryDetailsReady ? '本地观察中没有对应达人指标' : '扩展后台待重新加载，达人指标暂未显示'}</div> : <DecisionRuleMatch decision={decision} />}
                 </div>
@@ -372,6 +374,12 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
             {draft.targetMode !== "time" ? <label>视频数量（条）<NumberInput min="1" max="5000" step="1" value={draft.targetMaxItems} disabled={disabled} onChange={number("targetMaxItems")} /></label> : null}
           </div>
         </section>
+
+        {recommendationPlatform === "douyin" ? <section className="setting-group" aria-labelledby="profileIpTitle">
+          <div className="setting-heading"><strong id="profileIpTitle">IP 属地补采</strong><span>默认关闭额外开页</span></div>
+          <label className="check"><input type="checkbox" checked={draft.allowProfileIpFallback} disabled={disabled} aria-describedby="profileIpHelp" onChange={checkbox("allowProfileIpFallback")} />允许打开完整主页补采 IP 属地</label>
+          <p className="field-note" id="profileIpHelp">优先读取侧栏触发的接口响应。开启后，未获取到时会临时打开达人主页，读取后自动关闭，可能出现标签页闪动。关闭时，未获取到的 IP 属地保持为空，不影响继续采集。暂停后可修改，开始或继续本轮时生效。</p>
+        </section> : null}
 
         <ScheduleEditor draft={draft} disabled={disabled} onChange={onChange} platform={recommendationPlatform} />
 

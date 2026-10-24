@@ -109,6 +109,7 @@ export function useExtensionState() {
       },
       keepSystemAwake: draft.keepSystemAwake,
       markRejectedNotInterested: draft.markRejectedNotInterested,
+      allowProfileIpFallback: draft.allowProfileIpFallback,
       dryRun: draft.dryRun,
       schedule: {
         ...(current.schedule || {}),
