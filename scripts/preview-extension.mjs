@@ -91,6 +91,9 @@ const browserMock = `<script>
   snapshot.tasks = [snapshot.state, {...snapshot.state,route:{platform:"kuaishou",surface:"recommend",label:"快手推荐"},runId:"preview-ks",feedTabId:103}, {...snapshot.state,route:{platform:"bilibili",surface:"recommend",label:"B站首页推荐"},runId:"preview-bl",feedTabId:104,status:"idle"}, {...snapshot.state,route:{platform:'feigua',surface:'library',label:'飞瓜视频库'},runId:'preview-fg',feedTabId:102,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,restUntil:now+10800000,stats:{...snapshot.state.stats,scanned:357,pagesCollected:50,matched:42,rejectedProfiles:16,duplicates:21},status:'paused',pauseReason:'本批已采集 50 页，建议休息至少 3 小时。提前继续可能增加访问限制风险。'}, {...snapshot.state,route:{platform:'xingtu',surface:'market',label:'星图达人广场'},runId:'preview-xt',feedTabId:105,runTarget:{mode:'pages',maxPages:50},batchStartPages:0,stats:{...snapshot.state.stats,pagesCollected:12,matched:190,rejectedProfiles:4,duplicates:8},status:'paused',pauseReason:'演示：已暂停自动翻页'}];
   snapshot.feigua={pageCount:50,pageNumber:'50',finalized:false,candidates:[{name:'示例美食账号',followers:'12w'},{name:'示例旅行账号',followers:'8.5w'}]};
   snapshot.xingtu={pageCount:12,pageNumber:'12',finalized:false,candidates:[]};
+  snapshot.tasks.push({...snapshot.state,runId:'preview-hx',route:{platform:'huxuan',surface:'market',label:'腾讯互选视频号'},status:'paused',runTarget:{mode:'pages',maxPages:50},stats:{pagesCollected:2,matched:60,scanned:60,duplicates:0,uploaded:60},pauseReason:'演示：已保存两页，继续将从第 3 页开始'});
+  snapshot.huxuan={pageCount:2,pageNumber:'2',finalized:false,candidates:[]};
+  snapshot.settings.huxuanTarget={maxPages:50};snapshot.settings.huxuanDelay={minSeconds:4,maxSeconds:6};
   // Deterministic, local-only fixtures for layout/zoom acceptance. No collector runs.
   const responsivePreview = new URLSearchParams(location.search).has('responsive');
   snapshot.tasks.push({...snapshot.tasks[2],route:{platform:'bilibili',surface:'popular',label:'B站综合热门'}});

@@ -10,6 +10,7 @@ const outputDirectory = resolve(root, "dist");
 function extensionRuntime(): Plugin {
   const watchedFiles = [
     "background.js",
+    "lib/huxuan-api.js", "lib/huxuan-collection.js", "lib/huxuan-task.js", "content/huxuan-content.js", "page/huxuan-page-bridge.js",
     "manifest.json",
     "workbench-bridge.js",
     "page/page-bridge.js",
@@ -57,6 +58,7 @@ function extensionRuntime(): Plugin {
     },
     async closeBundle() {
       await Promise.all([
+        ...["page/huxuan-page-bridge.js","content/huxuan-content.js"].map(file=>esbuild({entryPoints:[resolve(root,file)],outfile:resolve(outputDirectory,file),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"})),
         esbuild({entryPoints:[resolve(root,"content/kuaishou-content.js")],outfile:resolve(outputDirectory,"content/kuaishou-content.js"),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"}),
         esbuild({entryPoints:[resolve(root,"content/bilibili-content.js")],outfile:resolve(outputDirectory,"content/bilibili-content.js"),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"}),
         esbuild({entryPoints:[resolve(root,"content/xingtu-content.js")],outfile:resolve(outputDirectory,"content/xingtu-content.js"),bundle:true,format:"iife",platform:"browser",target:"chrome120",legalComments:"none"}),

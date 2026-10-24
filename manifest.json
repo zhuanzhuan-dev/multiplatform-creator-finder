@@ -50,6 +50,25 @@
     },
     {
       "matches": [
+        "https://huxuan.qq.com/*"
+      ],
+      "js": [
+        "page/huxuan-page-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://huxuan.qq.com/*"
+      ],
+      "js": [
+        "content/huxuan-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://www.douyin.com/*"
       ],
       "js": [

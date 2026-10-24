@@ -76,3 +76,10 @@ test('Bilibili popular ranking is a separate runnable surface', () => {
   assert.equal(resolveRoute('https://www.bilibili.com/v/popular/all')?.runnable, true);
   assert.equal(resolveRoute('https://www.bilibili.com/v/popular/history')?.runnable, false);
 });
+
+test('Huxuan runs only on video-channel creator list, keeping official-account and detail pages read-only', () => {
+  assert.equal(resolveRoute('https://huxuan.qq.com/trade/selection/83740018/selection_list?type=finder-trade')?.runnable, true);
+  assert.equal(resolveRoute('https://huxuan.qq.com/trade/selection/83740018/selection_list?type=mp-trade')?.runnable, false);
+  assert.equal(resolveRoute('https://huxuan.qq.com/trade/selection/83740018/finder_trade_detail?id=sphFixture')?.runnable, false);
+  assert.equal(isRunnableRoute('http://huxuan.qq.com/trade/selection/83740018/selection_list?type=finder-trade'), false);
+});

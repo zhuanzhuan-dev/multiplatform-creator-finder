@@ -166,18 +166,18 @@ export function useExtensionState() {
     setBusyAction(action);
     show("");
     try {
-      const concrete = ["douyin", "kuaishou", "bilibili", "bilibili-popular", "feigua", "xingtu"].includes(selectedPlatform);
+      const concrete = ["douyin", "kuaishou", "bilibili", "bilibili-popular", "feigua", "xingtu", "huxuan"].includes(selectedPlatform);
       const route = snapshot?.state?.route;
       const inferred = route?.platform === "bilibili" && route?.surface === "popular" ? "bilibili-popular" : route?.platform;
       const platform = concrete ? selectedPlatform : (inferred || "auto");
       if (action === "start") {
         show("正在连接研究台并绑定当前标签页…");
-        if (!["feigua", "xingtu"].includes(platform) && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
+        if (!["feigua", "xingtu", "huxuan"].includes(platform) && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_START", tabId: tab.id, platform });
       } else if (action === "resume") {
         show("正在按目标恢复本轮，保留已有计数与记录…");
-        if (!["feigua", "xingtu"].includes(platform)) await saveSettings(draft);
+        if (!["feigua", "xingtu", "huxuan"].includes(platform)) await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform, runId: snapshot?.state?.runId });
       } else if (action === "pause") {

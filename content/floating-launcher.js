@@ -55,7 +55,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
   let preferences = launcherPreferences(), preferencesReady = false, visitHidden = visitHiddenInitially;
   let currentInfo = { visible: true, status: 'idle' };
   let renderedInfo = '';
-  let taskStates = {douyin:{},kuaishou:{},bilibili:{},bilibiliPopular:{},feigua:{},xingtu:{}};
+  let taskStates = {douyin:{},kuaishou:{},bilibili:{},bilibiliPopular:{},feigua:{},xingtu:{},huxuan:{}};
   function withLauncherRoute(key, task) {
     const platform = key === 'bilibiliPopular' ? 'bilibili' : (task.route?.platform || key);
     const surface = task.route?.surface || (key === 'bilibiliPopular' ? 'popular' : key === 'bilibili' ? 'recommend' : task.route?.surface);
@@ -102,7 +102,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
       }
       row.dataset.state=task.status;
       row.children[0].textContent=`${task.name} · ${task.label}`;
-      row.children[1].textContent=`${['feigua','xingtu'].includes(task.platform)?'已采集':'已刷'} ${task.count} ${task.unit}`;
+      row.children[1].textContent=`${['feigua','xingtu','huxuan'].includes(task.platform)?'已采集':'已刷'} ${task.count} ${task.unit}`;
     }
     button.title=summary;
     hint.style.top='0px';
@@ -169,7 +169,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
   });
   chrome.storage.onChanged.addListener((changes,area) => {
     if(area!=='local')return;
-    if (!['draState','draFeiguaState','draXingtuState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey].some(key => changes[key])) return;
+    if (!['draState','draFeiguaState','draXingtuState','draHuxuanState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey].some(key => changes[key])) return;
     if(changes[LAUNCHER_ENABLED_KEY]) preferences.enabled = changes[LAUNCHER_ENABLED_KEY].newValue !== false;
     if(changes[LAUNCHER_COMPACT_KEY]) preferences.compact = changes[LAUNCHER_COMPACT_KEY].newValue === true;
     if(changes[siteKey]) preferences.siteBlocked = changes[siteKey].newValue === true;
@@ -178,6 +178,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
     if(changes.draTheme){theme=changes.draTheme.newValue||'system';appearance();}
     if(changes.draState) taskStates.douyin=changes.draState.newValue || {};
     if(changes.draFeiguaState) taskStates.feigua=changes.draFeiguaState.newValue || {};
+    if(changes.draHuxuanState)taskStates.huxuan=changes.draHuxuanState.newValue || {};
     if(changes.draXingtuState) taskStates.xingtu=changes.draXingtuState.newValue || {};
     if(changes.draKuaishou) taskStates.kuaishou=changes.draKuaishou.newValue?.state || {};
     if(changes.draBilibiliState) taskStates.bilibili=changes.draBilibiliState.newValue || {};
@@ -185,7 +186,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
     if(changes.draState || changes.draFeiguaState || changes.draXingtuState || changes.draKuaishou || changes.draBilibiliState || changes.draBilibiliPopularState) render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)))));
     if(changes.draLauncherPosition && !drag){savedPosition=normalizeLauncherPosition(changes.draLauncherPosition.newValue);position();}
   });
-  chrome.storage.local.get(['draState','draFeiguaState','draXingtuState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey]).then(saved=>{taskStates={douyin:{...saved.draState,route:{platform:"douyin"}},kuaishou:{...saved.draKuaishou?.state,route:{platform:"kuaishou"}},bilibili:{...saved.draBilibiliState,route:saved.draBilibiliState?.route || {platform:"bilibili",surface:"recommend"}},bilibiliPopular:{...saved.draBilibiliPopularState,route:saved.draBilibiliPopularState?.route || {platform:"bilibili",surface:"popular"}},feigua:{...saved.draFeiguaState,route:{platform:"feigua"}},xingtu:{...saved.draXingtuState,route:{platform:"xingtu"}}};render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)))));preferences=launcherPreferences(saved,location.hostname);preferencesReady=true;visibility();theme=saved.draTheme||'system';savedPosition=normalizeLauncherPosition(saved.draLauncherPosition);appearance();position();}).catch(()=>host.remove());
+  chrome.storage.local.get(['draState','draFeiguaState','draXingtuState','draHuxuanState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey]).then(saved=>{taskStates={douyin:{...saved.draState,route:{platform:"douyin"}},kuaishou:{...saved.draKuaishou?.state,route:{platform:"kuaishou"}},bilibili:{...saved.draBilibiliState,route:saved.draBilibiliState?.route || {platform:"bilibili",surface:"recommend"}},bilibiliPopular:{...saved.draBilibiliPopularState,route:saved.draBilibiliPopularState?.route || {platform:"bilibili",surface:"popular"}},feigua:{...saved.draFeiguaState,route:{platform:"feigua"}},xingtu:{...saved.draXingtuState,route:{platform:"xingtu"}},huxuan:{...saved.draHuxuanState,route:{platform:"huxuan"}}};render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)))));preferences=launcherPreferences(saved,location.hostname);preferencesReady=true;visibility();theme=saved.draTheme||'system';savedPosition=normalizeLauncherPosition(saved.draLauncherPosition);appearance();position();}).catch(()=>host.remove());
   system.addEventListener('change',appearance);addEventListener('resize',position);
   void refresh();
 })();

@@ -109,6 +109,8 @@ export interface ScheduleSettings {
 }
 
 export interface Settings {
+  huxuanTarget?: {maxPages:number};
+  huxuanDelay?: {minSeconds:number;maxSeconds:number};
   feiguaTarget?: { maxPages?: number };
   feiguaDelay?: { minSeconds: number; maxSeconds: number };
   xingtuTarget?: { maxPages?: number };
@@ -142,6 +144,7 @@ export interface CloudState {
 }
 
 export interface Snapshot {
+  huxuan?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{authorName:string;authorId:string;followerCount:string;avatarUrl?:string}[]};
   pageRoute?: {platform:string;surface:string;label:string}|null;
   browsing?: {enabled:boolean;count:number;lastCapturedAt?:string;lastPageUrl?:string;lastError?:string};
   feigua?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;videos?:{videoId?:string;title?:string;coverUrl?:string;videoUrl?:string;durationSeconds?:number|null;metrics?:Record<string,string>;hotWords?:string[];observedAt?:string}[]}[]};

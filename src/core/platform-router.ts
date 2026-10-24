@@ -2,7 +2,7 @@ import { DOUYIN_RECOMMEND_URL } from "../../lib/platform-routes.js";
 
 export { DOUYIN_RECOMMEND_URL };
 
-export type PlatformId = "douyin" | "kuaishou" | "feigua" | "bilibili" | "xingtu";
+export type PlatformId = "douyin" | "kuaishou" | "feigua" | "bilibili" | "xingtu" | "huxuan";
 export type SurfaceId = "recommend" | "featured" | "creator" | "video" | "library" | "popular" | "market" | "unknown";
 
 export interface RouteContext {
@@ -26,6 +26,11 @@ interface PlatformRoute {
 }
 
 const PLATFORM_ROUTES: readonly PlatformRoute[] = [
+  {platform:"huxuan",hostnames:["huxuan.qq.com"],classify(url) {
+    return /^\/trade\/selection\/\d+\/selection_list\/?$/.test(url.pathname) && url.searchParams.get('type')==='finder-trade'
+      ? {surface:'market',label:'腾讯互选视频号',runnable:true}
+      : {surface:'unknown',label:'互选：请打开视频号创作者广场',runnable:false};
+  }},
   {
     platform: "douyin",
     hostnames: ["www.douyin.com"],
@@ -107,6 +112,7 @@ export function firstRunnableTabInWindow<T extends TabRouteCandidate>(tabs: read
 }
 
 export function launchUrl(platform: PlatformId, surface: SurfaceId): string {
+  if(platform === "huxuan") return "https://huxuan.qq.com/";
   if (platform === "kuaishou" && surface === "recommend") return "https://www.kuaishou.com/new-reco";
   if (platform === "feigua" && surface === "library") return "https://dy.feigua.cn/app/#/video/library/all";
   if (platform === "bilibili" && surface === "recommend") return "https://www.bilibili.com/";

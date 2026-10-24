@@ -67,7 +67,7 @@ export function DecisionsPage() {
             {decision.sourcePlatform === 'xingtu' ? <div className="video-summary"><strong>达人资料</strong>{decision.authorId ? <span>星图 ID：{decision.authorId}</span> : null}{decision.xingtuCreator ? <>
               <span>{[decision.xingtuCreator.followers && `粉丝 ${decision.xingtuCreator.followers}`,decision.xingtuCreator.metrics?.['预期CPM'] && `预期CPM ${decision.xingtuCreator.metrics['预期CPM']}`].filter(Boolean).join(' · ') || '星图未提供粉丝量和预期CPM'}</span>
               {decision.xingtuCreator.tags.length ? <span>标签：{decision.xingtuCreator.tags.join('、')}</span> : null}
-            </> : decision.code === 'XINGTU_OBSERVED' ? <span>达人指标暂未显示</span> : null}</div> : <>
+            </> : decision.code === 'XINGTU_OBSERVED' ? <span>达人指标暂未显示</span> : null}</div> : decision.sourcePlatform === 'huxuan' ? <div className="video-summary"><strong>视频号达人资料</strong><span>视频号 ID：{decision.authorId || '待补数'}</span></div> : <>
               <div className="video-summary">
                 <strong>{decision.caption || decision.videoId || '—'}</strong>
                 <span>{decisionMetricLine(decision)}</span>
