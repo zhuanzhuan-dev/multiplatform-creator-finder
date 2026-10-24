@@ -1,3 +1,4 @@
+import { DecisionRuleMatch } from '../shared/DecisionRuleMatch';
 import { errorMessage } from '../shared/error-message';
 import { useEffect, useRef, useState } from 'react';
 import { decisionMeta, decisionMetricLine, formatLocalDateTime } from '../sidepanel/format';
@@ -76,7 +77,7 @@ export function DecisionsPage() {
             </>}
           </td>
           <td data-label="处理结果"><span className={`decision-badge ${meta.tone}`}>{meta.label}</span></td>
-          <td data-label="处理依据" className="reason">{decision.reasons?.map(errorMessage).join(' · ') || decision.code}</td>
+          <td data-label="处理依据" className="reason"><DecisionRuleMatch decision={decision} /></td>
           <td className="row-action">{decision.profileUrl?<a href={decision.profileUrl} target="_blank" rel="noreferrer">查看主页 ↗</a>:<span>—</span>}</td>
         </tr>;})}</tbody>
       </table></div>}

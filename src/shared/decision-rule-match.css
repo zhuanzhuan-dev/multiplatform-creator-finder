@@ -1,0 +1,7 @@
+.decision-rule-match { min-width: 0; color: var(--muted); font-size: .75rem; line-height: 1.55; overflow-wrap: anywhere; white-space: normal; }
+.decision-rule-match p { margin: .25rem 0; }
+.decision-rule-match .rule-match-source { color: var(--text); }
+.decision-rule-match summary { width: fit-content; max-width: 100%; padding: .25rem 0; color: var(--blue); cursor: pointer; }
+.decision-rule-match summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.decision-rule-match ul { margin: .25rem 0 .5rem; padding-left: 1.25rem; }
+.decision-rule-match li + li { margin-top: .25rem; }

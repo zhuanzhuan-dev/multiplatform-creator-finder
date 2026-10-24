@@ -1,3 +1,4 @@
+import { captureRuleMatch } from "./lib/rule-match.js";
 import { createRuleSync } from "./lib/rule-sync.js";
 import { createKuaishouRuntime, KUAISHOU_ALARM, KUAISHOU_STOP_ALARM } from './lib/kuaishou-task.js';
 import { createBilibiliRuntime, splitLegacyBilibiliStorage, BILIBILI_ALARM, BILIBILI_STOP_ALARM, BILIBILI_POPULAR_ALARM, BILIBILI_POPULAR_STOP_ALARM } from './lib/bilibili-task.js';
@@ -157,7 +158,7 @@ const feigua = createFeiguaRuntime({
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload:requestUpload,
   savePage:async(page,runId,legacy=false,captureRules=null)=>{
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy,...(!legacy && captureRules?{ruleContext:{platform:"feigua",rules:structuredClone(captureRules),capturedAt:page.capturedAt}}:{})})));
+    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation(row,page,runId,"automatic"),uploadEligible:!legacy,...(!legacy && captureRules?{ruleContext:{platform:"feigua",rules:structuredClone(captureRules),capturedAt:page.capturedAt},ruleMatch:captureRuleMatch(row.ruleDecision,{route:{label:'飞瓜视频库'}},'feigua')}:{})})));
     void requestUpload();
     return items;
   }
@@ -193,7 +194,7 @@ const kuaishou = createKuaishouRuntime({
     await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'kuaishou',accountPlatform:'kuaishou'}]);
     const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
       dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
-      action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons}});
+      action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons,ruleMatch:captureRuleMatch(decision,owner,'kuaishou')}});
     payload.comment_count=observation.comments ?? null;payload.favorite_count=observation.favorites ?? null;
     Object.assign(payload.rpa_feedback,{source:'kuaishou-recommend',account_platform:'kuaishou',kuaishou_user_id:observation.authorId,
       kuaishou_id:profile?.kuaishouId || '',kuaishou_handle_source:profile?.kuaishouId?'profile_uid_text':null,
@@ -207,7 +208,7 @@ function collectBilibili(observation,profile,decision,owner) {
     await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'bilibili',accountPlatform:'bilibili'}]);
     const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
       dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
-      action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons}});
+      action:'collect',score:decision.score,extra:{finderDecision:decision.code,reasons:decision.reasons,ruleMatch:captureRuleMatch(decision,owner,'bilibili')}});
     payload.comment_count=observation.comments ?? null;payload.favorite_count=observation.favorites ?? null;
     payload.share_count=observation.shares ?? null;
     Object.assign(payload.rpa_feedback,{source:observation.feedSurface==='popular'?'bilibili-popular':'bilibili-web-recommend',account_platform:'bilibili',bilibili_mid:observation.authorId,
@@ -603,7 +604,8 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
     runStartedAt: owner.startedAt || "",
     sourcePlatform,
     code: String(decision.code || "UNKNOWN"),
-    reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean).slice(0, 4) : [],
+    reasons: Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean) : [],
+    ruleMatch: captureRuleMatch(decision, owner, sourcePlatform),
     accountName: profile?.authorName || observation.authorName || decision.accountName || "",
     tname: String(observation.tname || "").slice(0, 80),
     avatarUrl: profile?.avatarUrl || observation.avatarUrl || decision.avatarUrl || "",
@@ -635,7 +637,10 @@ async function withXingtuCreatorDetails(items) {
 function addOutbox(status, payload, error = "", { transitionPending = false, owner = state, captureRules = false } = {}) {
   reserveQueue(1);
   const configPlatform=taskConfigPlatform(owner);
-  if (captureRules && payload?.rpa_feedback) payload.rpa_feedback.rule_context={platform:configPlatform, rules:structuredClone(owner.runRules || configurationFor(configPlatform).rules), capturedAt:new Date().toISOString()};
+  if (captureRules && payload?.rpa_feedback) {
+    payload.rpa_feedback.rule_context={platform:configPlatform, rules:structuredClone(owner.runRules || configurationFor(configPlatform).rules), capturedAt:new Date().toISOString()};
+    payload.rpa_feedback.rule_match ||= captureRuleMatch({code:payload.rpa_feedback.finder_decision},owner,payload.rpa_feedback.source_platform);
+  }
   const item = {
     id: payload?.record_id || crypto.randomUUID(),
     status,
@@ -1632,6 +1637,7 @@ async function handleObservation(observation, profile, panelRecovered = false) {
   const categories = [...(creatorDecision.categories || []), ...(videoDecision.categories || [])]
     .filter((item, index, items) => items.findIndex((other) => other.id === item.id) === index);
   const score = scoreCreator({ profile, observation, categories, risks: creatorDecision.risks || videoDecision.risks || [], rules });
+  const matchedReasons = [...videoDecision.reasons, ...creatorDecision.reasons, ...score.reasons];
   if (!new Set(["S", "A", "B"]).has(score.level)) {
     increment("rejectedProfiles");
     if (settings.markRejectedNotInterested) increment("notInterested");
@@ -1659,7 +1665,8 @@ async function handleObservation(observation, profile, panelRecovered = false) {
     decision: "keep",
     action: "watch_then_next",
     score,
-    extra: { finderDecision: payload.reviewRequired ? "ACCEPTED_REVIEW" : "ACCEPTED", reasons: score.reasons || [] }
+    extra: { finderDecision: payload.reviewRequired ? "ACCEPTED_REVIEW" : "ACCEPTED", reasons: matchedReasons,
+      ruleMatch:captureRuleMatch({categories},state,'douyin') }
   }));
   if (existing) {
     increment("duplicates");
@@ -1676,7 +1683,8 @@ async function handleObservation(observation, profile, panelRecovered = false) {
   }
   recordDecision({
     code: payload.reviewRequired ? "ACCEPTED_REVIEW" : "ACCEPTED",
-    reasons: [score.level, ...(payload.reviewRequired ? ["已保存为候选，需人工确认"] : []), ...score.reasons],
+    reasons: [score.level, ...(payload.reviewRequired ? ["已保存为候选，需人工确认"] : []), ...matchedReasons],
+    categories,
     accountName: payload.accountName
   }, observation, profile);
   await persistWorkData();
@@ -2671,9 +2679,13 @@ async function captureBrowsePage(page,sender) {
   const day=new Date().toISOString().slice(0,10);
   const runId=`feigua-browse:${day}`;
   try {
-    const items=await saveObservations(page.rows.map(row=>({...normalizeFeiguaObservation({...row,ruleDecision:evaluateFeiguaRules(page.rows.filter(item=>rowAccountKey(item)===rowAccountKey(row)),rules)},page,runId,'browse'),uploadEligible:true})));
+    const items=await saveObservations(page.rows.map(row=>{
+      const decision=evaluateFeiguaRules(page.rows.filter(item=>rowAccountKey(item)===rowAccountKey(row)),rules);
+      return {...normalizeFeiguaObservation({...row,ruleDecision:decision},page,runId,'browse'),uploadEligible:true,
+        ruleMatch:captureRuleMatch(decision,{route:{label:'飞瓜随浏览采集'}},'feigua')};
+    }));
     void requestUpload();
-    const owner={runId,startedAt:page.capturedAt,route:{platform:'feigua'}};
+    const owner={runId,startedAt:page.capturedAt,route:{platform:'feigua',label:'飞瓜随浏览采集'}};
     for(const item of items)recordDecision(item.raw.ruleDecision,item,null,owner);
     browseState.lastCapturedAt=page.capturedAt; browseState.lastPageUrl=page.pageUrl; browseState.lastError='';
     await chrome.storage.local.set({draFeiguaBrowsing:browseState});

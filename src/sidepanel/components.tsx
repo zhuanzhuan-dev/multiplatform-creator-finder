@@ -1,3 +1,4 @@
+import { DecisionRuleMatch } from '../shared/DecisionRuleMatch';
 import { ScoringRulesEditor } from './ScoringRulesEditor';
 import { errorMessage } from '../shared/error-message';
 import { sourcePlatformLabel } from "../../lib/source-platform.js";
@@ -143,7 +144,8 @@ export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates
                     <span className={`decision-label ${meta.tone}`}>{meta.label}</span>
                     <AccountVideosControl decision={decision} now={now} />
                   </div>
-                  <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · </span>{decision.code === 'XINGTU_OBSERVED' ? xingtuHistoryDetailsReady ? '本地观察中没有对应达人指标' : '扩展后台待重新加载，达人指标暂未显示' : decision.reasons?.length ? decision.reasons.map(errorMessage).join(" · ") : decision.code || "已完成判断"}</div>
+                  <div className="decision-reason"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)}</span></div>
+                  {decision.code === 'XINGTU_OBSERVED' ? <div className="decision-reason">{xingtuHistoryDetailsReady ? '本地观察中没有对应达人指标' : '扩展后台待重新加载，达人指标暂未显示'}</div> : <DecisionRuleMatch decision={decision} />}
                 </div>
                 <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>
               </div>

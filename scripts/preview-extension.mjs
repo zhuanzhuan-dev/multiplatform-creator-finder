@@ -2,10 +2,36 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { DOUYIN_RECOMMEND_URL } from "../lib/platform-routes.js";
+import { mergeRules } from '../lib/defaults.js';
+import { decideKuaishou } from '../lib/kuaishou-task.js';
+import { decideBilibili, mergeBilibiliRules } from '../lib/bilibili-rules.js';
+import { evaluateFeiguaRules } from '../lib/feigua-rules.js';
+import { captureRuleMatch } from '../lib/rule-match.js';
 
 const root = resolve(import.meta.dirname, "../dist");
 const extensionManifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
 const port = Number(process.env.EXTENSION_PREVIEW_PORT || 4174);
+// The rule-matches preview uses real evaluators and stays entirely local.
+const previewNow = Date.now();
+const previewRules = mergeRules({hard:{minFollowers:10000,maxFollowers:100000,minVideoDurationSeconds:75,minVideoLikes:4200},positiveCategories:[{id:'digital',name:'数码测评',keywords:['手机测评'],score:15,enabled:true}]});
+const previewVideo = {contentType:'video',caption:'新款手机测评',durationSeconds:90,likes:5000};
+const previewProfile = {authorName:'手机测评员',followers:80000,averageLikes:5000,kuaishouId:'preview'};
+const recordPreview = (sourcePlatform, taskName, decision, index, patch={}) => ({
+  id:`rule-preview-${index}`,sourcePlatform,runId:`preview-${sourcePlatform}`,runStartedAt:new Date(previewNow-600000).toISOString(),
+  accountName:`${taskName}示例达人`,authorId:`example-${sourcePlatform}`,caption:previewVideo.caption,...previewVideo,
+  ...decision,occurredAt:new Date(previewNow-index*60000).toISOString(),
+  ruleMatch:captureRuleMatch(decision,{route:{label:taskName}},sourcePlatform),...patch,
+});
+const ruleMatchPreview = [
+  recordPreview('douyin','抖音推荐',decideKuaishou(previewVideo,previewProfile,previewRules),1),
+  recordPreview('kuaishou','快手推荐',decideKuaishou(previewVideo,{...previewProfile,averageLikes:null},previewRules),2),
+  recordPreview('bilibili','B站首页推荐',decideBilibili({...previewVideo,caption:'美食探店',tname:'美食',plays:150000,pubdateSeconds:previewNow/1000-86400},previewProfile,mergeBilibiliRules(),previewNow),3,{caption:'美食探店',tname:'美食',plays:150000}),
+  recordPreview('feigua','飞瓜视频库',evaluateFeiguaRules([{title:'手机测评'}],{feiguaKeywords:[],feiguaPositiveKeywords:['手机测评']}),4),
+  recordPreview('feigua','飞瓜视频库',evaluateFeiguaRules([{title:'日常记录'}],{feiguaKeywords:[],feiguaPositiveKeywords:['手机测评']}),5,{caption:'日常记录'}),
+  recordPreview('xingtu','星图达人广场',{code:'XINGTU_PENDING_REVIEW',reasons:['按星图页面筛选采集，待人工复核']},6),
+  recordPreview('huxuan','腾讯互选视频号',{code:'HUXUAN_CANDIDATE_REVIEW',reasons:['互选列表候选，待研究台人工复核']},7),
+  recordPreview('douyin','抖音推荐',{code:'ACCEPTED',reasons:['旧记录保留原有判断依据']},8,{ruleMatch:null,accountName:'历史记录示例'}),
+];
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -105,6 +131,12 @@ const browserMock = `<script>
     snapshot.decisionHistory = snapshot.state.recentDecisions.slice(0,3).map((item,index)=>({...item,id:'preview-'+index,authorId:'preview-author-'+index,videoId:'preview-video-'+index,sourcePlatform:'douyin',accountName:index===0?'用于响应式布局验收的很长达人昵称':item.accountName,caption:'用于响应式验收的视频标题与连续英文 LongVideoTitleWithoutSpacesForLayoutVerification',plays:123456789,likes:1234567,durationSeconds:125}));
     snapshot.decisionHistoryTotal = snapshot.decisionHistory.length;
   }
+  const ruleMatchMode = new URLSearchParams(location.search).has('rule-matches');
+  if (ruleMatchMode) {
+    for (const task of snapshot.tasks) task.status = 'paused';
+    snapshot.decisionHistory = ${JSON.stringify(ruleMatchPreview)};
+    snapshot.decisionHistoryTotal = snapshot.decisionHistory.length;
+  }
   const storageListeners = new Set();
   const previewStorageKey = "draPreviewStorage";
   const readStored = () => JSON.parse(localStorage.getItem(previewStorageKey) || "{}");
@@ -138,8 +170,12 @@ const browserMock = `<script>
         if (message.type === "DRA_DEBUG_STATUS") return reply({ok:true,enabled:false,samples:{count:0,bytes:0}});
         if (message.type === "DRA_QUERY_HISTORY") {
           const options = message.options || {};
-          const items = (snapshot.decisionHistory || []).filter(item => (!options.authorId || item.authorId === options.authorId) && (!options.query || (item.accountName + item.caption).includes(options.query)) && (!options.sourcePlatform || item.sourcePlatform === options.sourcePlatform));
-          return reply({ok:true,items,total:items.length,counts:{good:1,review:1,reject:1},runs:[{id:'preview-run',startedAt:new Date(now).toISOString()}],nextCursor:null,asOf:now});
+          const items = (snapshot.decisionHistory || []).filter(item => (!options.authorId || item.authorId === options.authorId) && (!options.query || [item.accountName,item.caption,item.ruleMatch?.ruleName,...(item.reasons || [])].join(' ').includes(options.query)) && (!options.sourcePlatform || item.sourcePlatform === options.sourcePlatform) && (!options.runId || item.runId === options.runId));
+          const counts={good:0,review:0,reject:0};
+          for (const item of items) counts[item.code === 'ACCEPTED' || item.code === 'FEIGUA_MATCHED' ? 'good' : /REVIEW|OBSERVED|MISSING/.test(item.code || '') ? 'review' : 'reject']++;
+          const filtered=options.tone ? items.filter(item => (item.code === 'ACCEPTED' || item.code === 'FEIGUA_MATCHED' ? 'good' : /REVIEW|OBSERVED|MISSING/.test(item.code || '') ? 'review' : 'reject') === options.tone) : items;
+          const runs=[...new Map(items.map(item=>[item.runId,{id:item.runId,startedAt:item.runStartedAt || item.occurredAt}])).values()];
+          return reply({ok:true,items:filtered,total:filtered.length,counts,runs,nextCursor:null,asOf:now});
         }
         if (message.type === "DRA_SYNC_RULES") return reply({ok:true,status:snapshot.cloud.ruleSync});
         const configKey = "previewConfig:" + (message.platform && message.platform !== "auto" ? message.platform : "douyin");
@@ -152,7 +188,8 @@ const browserMock = `<script>
         if (message.type !== "DRA_GET_STATUS") return reply({ ...snapshot, ok: true });
         const state = snapshot.tasks.find(task => message.platform === "bilibili-popular" ? task.route?.platform === "bilibili" && task.route?.surface === "popular" : task.route?.platform === message.platform && task.route?.surface !== "popular") || snapshot.state;
         const rules = ["bilibili", "bilibili-popular"].includes(message.platform) ? bilibiliRules : snapshot.rules;
-        reply({ ...snapshot, state, rules, ...readStored()[configKey], configPlatform: message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
+        const history = ruleMatchMode ? snapshot.decisionHistory.filter(item => item.sourcePlatform === state.route?.platform) : snapshot.decisionHistory;
+        reply({ ...snapshot, state, rules, ...readStored()[configKey], ...(ruleMatchMode ? {decisionHistory:history,decisionHistoryTotal:history.length} : {}), configPlatform: message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
       })),
       onMessage: { addListener() {}, removeListener() {} }
     },

@@ -26,6 +26,7 @@ export interface Decision {
   runStartedAt?: string;
   code?: string;
   reasons?: string[];
+  ruleMatch?: {taskName: string; ruleName: string; matchedItems: string[]} | null;
   accountName?: string;
   tname?: string;
   avatarUrl?: string;
