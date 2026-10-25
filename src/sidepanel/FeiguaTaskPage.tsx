@@ -39,7 +39,7 @@ export function FeiguaTaskPage({ruleSyncStatus,extension, draft, now}: Props) {
   const save=async()=>{
     setSaving(true);setNotice('');
     try {
-      await sendRuntime({type:'DRA_SAVE_FEIGUA_CONFIG',maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),positiveKeywords,keywords,schedule:{enabled:scheduleDraft.scheduleEnabled,weekdays:scheduleDraft.scheduleWeekdays,times:scheduleDraft.scheduleTimes,target:{mode:scheduleDraft.scheduleTargetMode,durationMinutes:scheduleDraft.scheduleDurationMinutes,maxItems:scheduleDraft.scheduleMaxItems},reuseExistingTab:scheduleDraft.scheduleReuseExistingTab,lateToleranceMinutes:scheduleDraft.scheduleLateToleranceMinutes}});
+      await sendRuntime({type:'DRA_SAVE_FEIGUA_CONFIG',platform:snapshot.configPlatform,maxPages:Number(limit),minSeconds:Number(minDelay),maxSeconds:Number(maxDelay),positiveKeywords,keywords,schedule:{enabled:scheduleDraft.scheduleEnabled,weekdays:scheduleDraft.scheduleWeekdays,times:scheduleDraft.scheduleTimes,target:{mode:scheduleDraft.scheduleTargetMode,durationMinutes:scheduleDraft.scheduleDurationMinutes,maxItems:scheduleDraft.scheduleMaxItems},reuseExistingTab:scheduleDraft.scheduleReuseExistingTab,lateToleranceMinutes:scheduleDraft.scheduleLateToleranceMinutes}});
       await extension.refresh();setNotice('已保存：浏览采集立即生效，自动翻页从新一轮生效');
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}finally{setSaving(false);}
   };

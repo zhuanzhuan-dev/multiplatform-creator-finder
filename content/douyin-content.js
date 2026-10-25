@@ -14,7 +14,7 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
   function requestPageIdentity(command, payload, timeoutMs) {
     return new Promise(resolve => {
       const id = crypto.randomUUID();
-      const channel = "DOUYIN_AUTO_FINDER_PAGE";
+      const channel = "DOUYIN_AUTO_FINDER_PAGE_V2";
       const finish = value => { clearTimeout(timer); window.removeEventListener("message", receive); resolve(value); };
       const receive = event => {
         if (event.source === window && event.data?.channel === channel && event.data?.direction === "response" && event.data?.id === id) finish(event.data.result);
@@ -48,7 +48,7 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
 
   function createLoop(settings, rules, runId, loopId, resume = null) {
     const abort = new AbortController();
-    const PAGE_CHANNEL = "DOUYIN_AUTO_FINDER_PAGE";
+    const PAGE_CHANNEL = "DOUYIN_AUTO_FINDER_PAGE_V2";
     let running = false;
     let activeRunId = "";
     let dwellPolicy = { mode: "fixed", fixedSeconds: 30, minSeconds: 10, typicalSeconds: 15, maxSeconds: 30 };
@@ -274,7 +274,11 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
       const profileUrl = profile?.profileUrl || observation.profileUrl;
       if (!secUid || !profileUrl) return null;
       const result = await pageCommand("GET_PROFILE_IP", { secUid }, 3_000);
-      const ip = result?.ipLocation;
+      let ip = result?.ipLocation;
+      if(ip?.ipLocationStatus!=='available'){
+        const captured=await sendRuntime({type:'DRA_READ_CAPTURED_PROFILE_IP',secUid});
+        if(captured?.ipLocation)ip=captured.ipLocation;
+      }
       return ip?.secUid === secUid && ip.ipLocationProfileUrl === profileUrl
         && ["available", "missing"].includes(ip.ipLocationStatus) ? ip : null;
     }

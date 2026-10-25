@@ -190,6 +190,17 @@ const browserMock = `<script>
           return reply({ok:true,items:filtered,total:filtered.length,counts,runs,nextCursor:null,asOf:now});
         }
         if (message.type === "DRA_SYNC_RULES") return reply({ok:true,status:snapshot.cloud.ruleSync});
+        const savedInstances=readStored().previewInstances || [];
+        if(message.type==='DRA_CREATE_TASK'){
+          const base=snapshot.tasks.find(task=>(message.platform==='bilibili-popular'?task.route?.surface==='popular':task.route?.platform===message.platform && task.route?.surface!=='popular')) || snapshot.state;
+          const state={...structuredClone(base),taskId:'task:'+crypto.randomUUID(),taskName:message.name,status:'idle',runId:'',stats:{},startedAt:null,activeSince:null,elapsedMs:0};
+          const settings={...snapshot.settings,schedule:{...snapshot.settings.schedule,enabled:false},feiguaSchedule:{enabled:false}};
+          const stored=readStored();localStorage.setItem(previewStorageKey,JSON.stringify({...stored,previewInstances:[...savedInstances,state],['previewConfig:'+state.taskId]:{settings,rules:structuredClone(snapshot.rules)}}));
+          return reply({ok:true,state});
+        }
+        if(message.type==='DRA_RENAME_TASK'){
+          const stored=readStored();localStorage.setItem(previewStorageKey,JSON.stringify({...stored,previewInstances:savedInstances.map(task=>task.taskId===message.taskId?{...task,taskName:message.name}:task)}));return reply({ok:true});
+        }
         const configKey = "previewConfig:" + (message.platform && message.platform !== "auto" ? message.platform : "douyin");
         if (message.type === "DRA_SAVE_CONFIG") {
           const stored = readStored();
@@ -198,10 +209,10 @@ const browserMock = `<script>
           return reply({...snapshot, ...config, ok:true, configPlatform:message.platform || "douyin", settingsDraft:null, problems:[]});
         }
         if (message.type !== "DRA_GET_STATUS") return reply({ ...snapshot, ok: true });
-        const state = snapshot.tasks.find(task => message.platform === "bilibili-popular" ? task.route?.platform === "bilibili" && task.route?.surface === "popular" : task.route?.platform === message.platform && task.route?.surface !== "popular") || snapshot.state;
+        const state = [...savedInstances,...snapshot.tasks].find(task => task.taskId===message.platform || (message.platform === "bilibili-popular" ? task.route?.platform === "bilibili" && task.route?.surface === "popular" : task.route?.platform === message.platform && task.route?.surface !== "popular")) || snapshot.state;
         const rules = ["bilibili", "bilibili-popular"].includes(message.platform) ? bilibiliRules : snapshot.rules;
         const history = ruleMatchMode ? snapshot.decisionHistory.filter(item => item.sourcePlatform === state.route?.platform) : snapshot.decisionHistory;
-        reply({ ...snapshot, state, rules, ...readStored()[configKey], ...(ruleMatchMode ? {decisionHistory:history,decisionHistoryTotal:history.length} : {}), configPlatform: message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
+        reply({ ...snapshot, tasks:[...snapshot.tasks,...savedInstances], state, rules, ...readStored()[configKey], ...(ruleMatchMode ? {decisionHistory:history,decisionHistoryTotal:history.length} : {}), configPlatform: message.platform?.startsWith("task:") || message.platform === "bilibili-popular" ? message.platform : state.route?.platform || "douyin" });
       })),
       onMessage: { addListener() {}, removeListener() {} }
     },

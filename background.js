@@ -1,3 +1,7 @@
+import {createProfileNetworkCapture} from "./lib/douyin-profile-network.js";
+import { createTaskInstances, TASK_INSTANCES_KEY, TASK_PROGRESS_KEY, TASK_PLATFORMS } from "./lib/task-instances.js";
+import { createInstanceRuntime } from "./lib/instance-runtime.js";
+import { createDouyinRuntime, DOUYIN_CONTENT_MESSAGES } from "./lib/douyin-task.js";
 import { decisionIpFields } from "./lib/decision-history.js";
 import { captureRuleMatch } from "./lib/rule-match.js";
 import { createRuleSync } from "./lib/rule-sync.js";
@@ -13,37 +17,25 @@ import { createXingtuRuntime, XINGTU_ALARM, XINGTU_STOP_ALARM } from "./lib/xing
 import { createHuxuanRuntime, defaultHuxuanSettings, HUXUAN_ALARM } from "./lib/huxuan-task.js";
 import { normalizeHuxuanObservation, huxuanObservationRecord } from "./lib/huxuan-collection.js";
 import { canonicalXingtuPageUrl } from './lib/xingtu-parser.js';
-import { canEngage, reserveEngagement, newEngagement, restoreEngagement, ENGAGEMENT_KEYS } from "./lib/engagement.js";
+import { restoreEngagement } from "./lib/engagement.js";
 import { rawSamples } from "./lib/raw-sample-store.js";
 import { sanitizeRaw } from "./lib/raw-sample.js";
 import { accountProfile } from "./lib/account-profile.js";
 import { launcherState, toolbarState, aggregateTaskState } from "./lib/launcher-state.js";
-import { contentSkipDecision } from "./lib/content-type.js";
+
 import { createDouyinIpLocationReader } from "./lib/douyin-ip-location.js";
 import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
 import { loadOutbox, writeOutboxChanges } from "./lib/outbox-store.js";
-import {
-  CLOUD_DESTINATION,
-  MAX_INGEST_BYTES,
-  MAX_INGEST_RECORDS,
-  buildIngestBody,
-  buildObservationRecord,
-  classifyIngestStatus,
-  createCloudClient,
-  encodeIngestBody,
-  ingestResultSets,
-  pairUrlFor,
-  shrinkRecordsToByteLimit,
-} from "./lib/cloud.js";
+import { CLOUD_DESTINATION, MAX_INGEST_BYTES, MAX_INGEST_RECORDS, buildIngestBody, buildObservationRecord, classifyIngestStatus, createCloudClient, encodeIngestBody, ingestResultSets, pairUrlFor, shrinkRecordsToByteLimit } from "./lib/cloud.js";
 import { DEFAULT_RULES, DEFAULT_SETTINGS, INITIAL_STATE, STORAGE_KEYS, TEAM_DESTINATION, mergeRules, mergeSettings, mergeXingtuRules, mergeXingtuSettings, scheduleFrom, validateSettings } from "./lib/defaults.js";
 import { migrateDecisionHistory, writeDecisions, cleanupDecisions, decisionPreview, queryDecisions } from "./lib/decision-store.js";
 import { normalizeSourcePlatform } from "./lib/source-platform.js";
-import { makeCreatorKey } from "./lib/normalizers.js";
-import { evaluateCreatorRules, evaluateVideoRules, scoreCreator, validateRules } from "./lib/rule-engine.js";
-import { createRunWaits, runtimeStalled, stepBudget, withTimeout } from "./lib/runtime-health.js";
-import { canResumeRun, elapsedRunMs, getRunLimitReason, normalizeRunTarget } from "./lib/run-limits.js";
+
+import { validateRules } from "./lib/rule-engine.js";
+import { withTimeout } from "./lib/runtime-health.js";
+import { normalizeRunTarget } from "./lib/run-limits.js";
 import { nextScheduledOccurrence, validateSchedule } from "./lib/scheduler.js";
-import { firstRunnableTabInWindow, launchUrl, resolveRoute } from "./src/core/platform-router.ts";
+import { launchUrl, resolveRoute } from "./src/core/platform-router.ts";
 
 const WATCHDOG_ALARM = "dra-watchdog";
 const SCHEDULE_ALARM = "dra-schedule-next";
@@ -53,11 +45,8 @@ const RUN_STOP_ALARM = "dra-run-stop";
 const UPLOAD_ALARM = "dra-upload";
 const CREATOR_UPLOAD_BACKFILL_ALARM = "dra-creator-upload-backfill";
 const CREATOR_UPLOAD_BACKFILL_KEY = "draCreatorUploadBackfillV1";
-const MAX_SEEN_VIDEOS = 5_000;
 const MAX_OUTBOX = 1_000;
-const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const SIDE_PANEL_PATH = "sidepanel/index.html";
-const attachedDebuggerTabs = new Set();
 const panelPorts = new Map();
 const cloudClient = createCloudClient();
 const MAX_UPLOAD_ATTEMPTS = 8;
@@ -79,6 +68,7 @@ let bilibiliPopularConfig = {settings:mergeSettings(),rules:mergeBilibiliRules()
 let xingtuConfig = {settings:mergeXingtuSettings(),rules:mergeXingtuRules(),settingsDraft:null};
 let huxuanConfig = {settings:defaultHuxuanSettings(),rules:{},settingsDraft:null};
 function configurationFor(platform) {
+  if (instances.get(platform)) return instances.get(platform).config;
   if (platform === "huxuan") return huxuanConfig;
   if (platform === "kuaishou") return kuaishouConfig;
   if (platform === "bilibili-popular") return bilibiliPopularConfig;
@@ -87,6 +77,7 @@ function configurationFor(platform) {
   return {settings,rules,settingsDraft};
 }
 function taskConfigPlatform(task) {
+  if (task?.taskId?.startsWith("task:")) return task.taskId;
   if (task?.route?.platform === "bilibili" && task.route?.surface === "popular") return "bilibili-popular";
   return task?.route?.platform || "douyin";
 }
@@ -148,11 +139,32 @@ const ruleSync = createRuleSync({ storage:chrome.storage.local, auth:()=>cloudAu
 async function prepareFeedbackRules(platform) {
   const work=configQueue.then(()=>ruleSync.beforeStart(platform));configQueue=work.catch(()=>undefined);await work;
 }
-const runWaits = createRunWaits();
-let watchdogInFlight = null;
 
+
+const profileNetwork=createProfileNetworkCapture(chrome.debugger);
+const douyin = createDouyinRuntime({
+ config:()=>({settings,rules}),identity:()=>({taskId:'douyin',taskName:'默认任务'}),
+ changed:value=>{state=value.state;seenVideos=value.seenVideos;creatorIndex=value.creatorIndex;},
+ ready:initialize,persist:persistWorkData,persistState,indicators:updateTaskIndicators,
+ authorize:checkCloudConnection,beforeStart:()=>prepareFeedbackRules('douyin'),scheduleUpload:requestUpload,
+ recordDecision,addOutbox,touchOutbox,outbox:()=>outbox,cloudAuth:()=>cloudAuth,
+ recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
+ saveSettings:async next=>{settings=next;await chrome.storage.local.set({[STORAGE_KEYS.settings]:settings});},
+ selectPage:tabId=>chrome.tabs.get(tabId),ownedElsewhere:tabId=>ownedElsewhere(tabId,'douyin'),
+ waitForTabComplete,ensureContentRuntime,sendTabMessage,saveRawSample,readDouyinIpLocation,
+ captureProfileIp:profileNetwork.enable,releaseProfileIp:profileNetwork.detach,readCapturedProfileIp:profileNetwork.read
+});
+function observationRecord(...args){return douyin.observationRecord(...args);}
+function setPaused(...args){return douyin.setPaused(...args);}
+function syncRunStopAlarm(...args){return douyin.syncRunStopAlarm(...args);}
+function startRun(...args){return douyin.startRun(...args);}
+function resumeRun(...args){return douyin.resumeRun(...args);}
+function stopRun(...args){return douyin.stopRun(...args);}
+function watchdog(...args){return douyin.watchdog(...args);}
+function handleRunStopAlarm(...args){return douyin.handleRunStopAlarm(...args);}
 
 const feigua = createFeiguaRuntime({
+  ownedElsewhere:tabId=>ownedElsewhere(tabId,'feigua'),
   settings:()=>settings, rules:()=>rules, authorize:checkCloudConnection, beforeStart:()=>prepareFeedbackRules("feigua"),
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
@@ -165,6 +177,7 @@ const feigua = createFeiguaRuntime({
   }
 });
 const xingtu = createXingtuRuntime({
+  ownedElsewhere:tabId=>ownedElsewhere(tabId,'xingtu'),
   settings:()=>xingtuConfig.settings, rules:()=>xingtuConfig.rules, authorize:checkCloudConnection, beforeStart:()=>prepareFeedbackRules("xingtu"),
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   creatorIndex:()=>creatorIndex, reserveQueue, addOutbox, recordDecision,
@@ -177,6 +190,7 @@ const xingtu = createXingtuRuntime({
   }
 });
 const huxuan = createHuxuanRuntime({
+  ownedElsewhere:tabId=>ownedElsewhere(tabId,'huxuan'),
   settings:()=>huxuanConfig.settings, authorize:checkCloudConnection,
   ensureContent:ensureContentRuntime, waitForTab:waitForTabComplete,
   persist:persistWorkData, indicators:updateTaskIndicators, scheduleUpload:requestUpload, recordDecision,
@@ -187,11 +201,14 @@ const huxuan = createHuxuanRuntime({
   }
 });
 const kuaishou = createKuaishouRuntime({
+  ownedElsewhere:tabId=>ownedElsewhere(tabId,'kuaishou'),
   settings:()=>kuaishouConfig.settings,rules:()=>kuaishouConfig.rules,authorize:checkCloudConnection,beforeStart:()=>prepareFeedbackRules("kuaishou"),
   ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
   persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
   recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},
-  collect:async(observation,profile,decision,owner)=>{
+  collect:collectKuaishou
+});
+async function collectKuaishou(observation,profile,decision,owner){
     await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'kuaishou',accountPlatform:'kuaishou'}]);
     const payload=buildObservationRecord({observation,profile,runId:owner.runId,feedIndex:Number(owner.stats.scanned || 0)+1,
       dwellSeconds:observation.dwellSeconds,isRelevant:decision.matched,decision:decision.matched?'keep':decision.needsReview?'review':'skip',
@@ -202,8 +219,7 @@ const kuaishou = createKuaishouRuntime({
       kuaishou_profile_read:Boolean(profile),no_profile_navigation:false,review_required:Boolean(decision.needsReview)});
     addOutbox(owner.runSettings.dryRun?'dry-run':'pending',payload,'',{owner,captureRules:true});
     await persistWorkData();
-  }
-});
+}
 function collectBilibili(observation,profile,decision,owner) {
   return (async()=>{
     await saveObservations([{...normalizeDouyinObservation(observation,profile,owner.runId),sourcePlatform:'bilibili',accountPlatform:'bilibili'}]);
@@ -221,6 +237,7 @@ function collectBilibili(observation,profile,decision,owner) {
 }
 function createBilibiliSurfaceRuntime(surface, config) {
   return createBilibiliRuntime({
+    ownedElsewhere:tabId=>ownedElsewhere(tabId,surface==='popular'?'bilibili-popular':'bilibili'),
     settings:()=>config().settings,rules:()=>config().rules,authorize:checkCloudConnection,beforeStart:()=>prepareFeedbackRules(surface === "popular" ? "bilibili-popular" : "bilibili"),
     ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,
     persist:persistWorkData,indicators:updateTaskIndicators,scheduleUpload:requestUpload,recordDecision,
@@ -249,7 +266,107 @@ async function pauseLiveBilibili(reason) {
     if (task.active() && !task.state().runSettings?.dryRun) await task.pause(reason);
   }
 }
-function taskForSession(sessionId) { return [state,kuaishou.state(),bilibili.state(),bilibiliPopular.state(),feigua.state(),xingtu.state(),huxuan.state()].find(task=>task.runId===sessionId); }
+
+const instances=createTaskInstances({config:configurationFor,persist:persistWorkData,runtime:entry=>createInstanceRuntime(entry,{
+ persist:persistWorkData,persistState:()=>persistTaskProgress(instances.progressStorage()),indicators:updateTaskIndicators,authorize:checkCloudConnection,scheduleUpload:requestUpload,
+ ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,waitForTabComplete,ensureContentRuntime,sendTabMessage,
+ recordDecision,addOutbox,touchOutbox,reserveQueue,saveObservations,saveRawSample,readDouyinIpLocation,
+ captureProfileIp:profileNetwork.enable,releaseProfileIp:profileNetwork.detach,readCapturedProfileIp:profileNetwork.read,
+ collectKuaishou,collectBilibili,outbox:()=>outbox,cloudAuth:()=>cloudAuth,
+ recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},ownedElsewhere,
+ selectPage:async(entry,tabId)=>{
+   const previous=entry.runtime.state();
+   let tab=Number.isInteger(previous.feedTabId)?await chrome.tabs.get(previous.feedTabId).catch(()=>null):null;
+   if(!tab || !isRecommendationFeedUrl(tab.pendingUrl || tab.url || '')){
+     const current=Number.isInteger(tabId)?await chrome.tabs.get(tabId).catch(()=>null):null;
+     tab=await chrome.tabs.create({url:launchUrl('douyin','recommend'),active:true,...(current?.windowId?{windowId:current.windowId}:{})});
+   } else if(!tab.active)tab=await chrome.tabs.update(tab.id,{active:true});
+   return {...tab,createdByExtension:true};
+ }
+})});
+function defaultRuntime(platform){return {douyin,kuaishou,bilibili,'bilibili-popular':bilibiliPopular,feigua,xingtu,huxuan}[platform];}
+function runtimeFor(platform){return instances.get(platform)?.runtime || defaultRuntime(platform);}
+function taskStates(){return [douyinTaskSnapshot(),kuaishou.state(),bilibili.state(),bilibiliPopular.state(),feigua.state(),xingtu.state(),huxuan.state(),...instances.states()];}
+function ownedElsewhere(tabId,id){return taskStates().some(task=>Number.isInteger(tabId) && task.feedTabId===tabId && (task.taskId || taskConfigPlatform(task))!==id);}
+function instanceForAlarm(name){return instances.values().find(entry=>name==='dra-instance-watch:'+entry.id || name==='dra-instance-stop:'+entry.id || name==='dra-instance-schedule:'+entry.id);}
+async function controlTask(message){
+  let selection=message.platform;
+  if(!selection || selection==='auto')selection=taskConfigPlatform(await selectedTask(message.tabId));
+  const task=runtimeFor(selection);
+  if(!task)throw Error('找不到该平台任务或分身');
+  if(message.type!=='DRA_START' && message.runId && message.runId!==task.state().runId)throw Error('任务已变化，请刷新状态后重试');
+  if(message.type==='DRA_PAUSE'){await task.pause('用户暂停');return {ok:true,state:task.state()};}
+  if(message.type==='DRA_STOP')return {ok:true,state:await task.stop()};
+  if(message.type==='DRA_RESUME')return {ok:true,state:await task.resume({windowId:message.windowId,target:configurationFor(selection).settings.target})};
+  let tab=await chrome.tabs.get(message.tabId);
+  const entry=instances.get(selection),platform=entry?.platform || selection;
+  if(['feigua','xingtu','huxuan'].includes(platform)){
+    const route=resolveRoute(tab.pendingUrl || tab.url || '');
+    if(route?.platform===platform && route.runnable && !ownedElsewhere(tab.id,selection))return {ok:true,state:await task.start(tab.id)};
+    tab=await task.openPage({windowId:tab.windowId});return {ok:true,state:await task.start(tab.id)};
+  }
+  if(ownedElsewhere(tab.id,selection) && entry?.platform!=='douyin'){
+    const base=platform==='bilibili-popular'?'bilibili':platform;
+    tab=await chrome.tabs.create({windowId:tab.windowId,url:launchUrl(base,platform==='bilibili-popular'?'popular':'recommend'),active:true});
+  }
+  return {ok:true,state:await task.start({tabId:tab.id,windowId:tab.windowId})};
+}
+async function saveInstanceConfiguration(entry,message){
+  if(entry.runtime.active())throw Error('请先暂停当前分身再修改设置');
+  const current=entry.config,platform=entry.platform;
+  const merge=platform.startsWith('bilibili')?mergeBilibiliRules:platform==='xingtu'?mergeXingtuRules:mergeRules;
+  const next={...current,settings:{...current.settings,...message.settings},rules:merge(message.rules || current.rules),settingsDraft:null};
+  const problems=[...(platform==='xingtu'||platform==='huxuan'?[]:validateSettings(next.settings)),...(platform.startsWith('bilibili')?validateBilibiliRules(next.rules):platform==='xingtu'||platform==='huxuan'?[]:validateRules(next.rules)),...validateSchedule((platform==='feigua'?next.settings.feiguaSchedule:next.settings.schedule) || {enabled:false})];
+  if(problems.length && !message.saveDraft)throw Error(problems.join('；'));
+  entry.config=problems.length?{...current,settingsDraft:next.settings}:next;
+  await persistWorkData();await syncInstanceSchedule(entry);
+  return {ok:true,configPlatform:entry.id,...entry.config,problems};
+}
+async function saveInstanceCatalog(entry,message) {
+  const platform=entry.platform;
+  const maxPages=Number(message.maxPages),minSeconds=Number(message.minSeconds),maxSeconds=Number(message.maxSeconds);
+  if(!Number.isInteger(maxPages)||maxPages<1||maxPages>500)throw Error('页数需为1至500的整数');
+  if(!Number.isFinite(minSeconds)||!Number.isFinite(maxSeconds)||minSeconds<1||maxSeconds>30||maxSeconds<minSeconds)throw Error('翻页间隔需为1至30秒，最大值应大于或等于最小值');
+  const words=(value)=>{
+    if(!Array.isArray(value)||value.length>200||value.some(word=>typeof word!=='string'||word.length>100))throw Error('关键词最多200个，每个词最多100字');
+    return [...new Set(value.map(word=>word.trim()).filter(Boolean))];
+  };
+  const settings={...entry.config.settings,[platform+'Target']:{maxPages},[platform+'Delay']:{minSeconds,maxSeconds}};
+  let rules=entry.config.rules;
+  if(platform!=='huxuan')rules={...rules,[platform+'Keywords']:words(message.keywords)};
+  if(platform==='feigua')rules.feiguaPositiveKeywords=words(message.positiveKeywords);
+  if(message.schedule){const errors=validateSchedule(message.schedule);if(errors.length)throw Error(errors.join('；'));settings[platform==='feigua'?'feiguaSchedule':'schedule']=scheduleFrom(message.schedule,true);}
+  return saveInstanceConfiguration(entry,{settings,rules});
+}
+async function pauseLiveInstances(reason) {
+  for(const entry of instances.values())if(entry.runtime.active() && !entry.runtime.state().runSettings?.dryRun)await entry.runtime.pause(reason);
+}
+function catalogTaskForTab(platform,tabId) {
+  const entry=instances.forTab(tabId);
+  if(entry?.platform===platform)return entry.runtime;
+  const task=defaultRuntime(platform);
+  return task?.state().feedTabId===tabId?task:null;
+}
+async function pauseCatalogForNavigation(platform,tab) {
+  const route=resolveRoute(tab.url || tab.pendingUrl || '');
+  if(route?.platform!==platform || !(platform==='feigua'?/#\/(video-detail|blogger-detail)\//.test(tab.url || ''):route.surface==='creator'))return;
+  const active=[defaultRuntime(platform),...instances.values().filter(entry=>entry.platform===platform).map(entry=>entry.runtime)].filter(task=>task.active());
+  const bound=catalogTaskForTab(platform,tab.id) || catalogTaskForTab(platform,tab.openerTabId);
+  const task=bound || (active.length===1?active[0]:null);
+  if(task?.active())await task.pause(`你已进入${platform==='feigua'?'飞瓜详情':'星图达人主页'}，自动翻页已暂停`);
+}
+async function syncInstanceSchedule(entry,from=Date.now()){
+  const alarm='dra-instance-schedule:'+entry.id;await chrome.alarms.clear(alarm);
+  const schedule=entry.platform==='feigua'?entry.config.settings.feiguaSchedule:entry.config.settings.schedule;
+  if(!schedule?.enabled || validateSchedule(schedule).length)return;
+  const next=nextScheduledOccurrence(schedule,from);if(next)await chrome.alarms.create(alarm,{when:next.scheduledTime});
+}
+
+function observationOwner(item) {
+  return {runId:item.sessionId,startedAt:item.firstObservedAt,taskId:item.taskId || item.sourcePlatform,
+    taskName:item.taskName || '默认任务',route:{platform:item.sourcePlatform}};
+}
+function taskForSession(sessionId) { return taskStates().find(task=>task.runId===sessionId); }
 function incrementForSession(sessionId,key,amount=1) {
   const owner=taskForSession(sessionId); if(owner) owner.stats[key]=Number(owner.stats[key]||0)+amount;
 }
@@ -288,8 +405,9 @@ async function persistOutboxChanges() {
   for (const [id, value] of writes) if (outboxWrites.get(id)?.revision === value.revision) outboxWrites.delete(id);
   for (const [id, revision] of deletes) if (outboxDeletes.get(id) === revision) outboxDeletes.delete(id);
 }
-function aggregateState() { return aggregateTaskState([state,kuaishou.state(),bilibili.state(),bilibiliPopular.state(),feigua.state(),xingtu.state(),huxuan.state()]); }
+function aggregateState() { return aggregateTaskState(taskStates()); }
 function syncPower() {
+  if(instances.states().some(task=>["running","starting"].includes(task.status) && task.runSettings?.keepSystemAwake)){chrome.power.requestKeepAwake("system");return;}
   if (huxuan.active() && huxuan.state().runSettings?.keepSystemAwake || kuaishou.active() && kuaishou.state().runSettings?.keepSystemAwake || bilibiliTasks().some((task) => task.active() && task.state().runSettings?.keepSystemAwake) || isActiveRunStatus() && settings.keepSystemAwake || feigua.active() && feigua.state().runSettings?.keepSystemAwake || xingtu.active() && xingtu.state().runSettings?.keepSystemAwake) chrome.power.requestKeepAwake('system');
   else chrome.power.releaseKeepAwake();
 }
@@ -298,6 +416,8 @@ function douyinTaskSnapshot() {
   return state.route ? state : {...state,route:{platform:'douyin',surface:'recommend',label:'抖音推荐'}};
 }
 async function selectedTask(tabId,platform) {
+  if(instances.get(platform))return instances.get(platform).runtime.state();
+  if(!platform || platform==='auto'){const entry=instances.forTab(tabId);if(entry)return entry.runtime.state();}
   if(platform==='kuaishou') return kuaishou.state();
   if(platform==='bilibili' || platform==='bilibili-popular') return bilibiliBySelection(platform).state();
   if(platform==='feigua') return feigua.state();
@@ -338,7 +458,7 @@ function isRecommendationFeedUrl(value) {
 async function initialize() {
   if (initialized) return initialized;
   initialized = (async () => {
-    const saved = splitLegacyBilibiliStorage(await chrome.storage.local.get([...Object.values(STORAGE_KEYS),CREATOR_UPLOAD_BACKFILL_KEY,"draFeiguaBrowsing","draXingtuBrowsing","draXingtuConfig","draHuxuanConfig","draHuxuanState","draHuxuanCollection","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliState","draBilibiliConfig","draBilibiliPopular","draBilibiliPopularState","draBilibiliPopularConfig"]));
+    const saved = splitLegacyBilibiliStorage(await chrome.storage.local.get([...Object.values(STORAGE_KEYS),TASK_INSTANCES_KEY,TASK_PROGRESS_KEY,CREATOR_UPLOAD_BACKFILL_KEY,"draFeiguaBrowsing","draXingtuBrowsing","draXingtuConfig","draHuxuanConfig","draHuxuanState","draHuxuanCollection","draKuaishou","draKuaishouConfig","draBilibili","draBilibiliState","draBilibiliConfig","draBilibiliPopular","draBilibiliPopularState","draBilibiliPopularConfig"]));
     browseState={...browseState,...saved.draFeiguaBrowsing};
     xingtuBrowseState={...xingtuBrowseState,...saved.draXingtuBrowsing};
     const savedRules = saved[STORAGE_KEYS.rules] || {};
@@ -399,7 +519,6 @@ async function initialize() {
     await chrome.alarms.create("dra-history-cleanup", {periodInMinutes:5});
     if (state.status === "starting") {
       state.status = "paused";
-      runWaits.cancel();
       state.startupStage = "";
       state.pauseReason = "上次启动过程被 Chrome 中断，请重新开始本轮";
     }
@@ -413,6 +532,8 @@ async function initialize() {
     creatorIndex = saved[STORAGE_KEYS.creatorIndex] && typeof saved[STORAGE_KEYS.creatorIndex] === "object"
       ? saved[STORAGE_KEYS.creatorIndex]
       : {};
+    if (savedState.route?.platform === "feigua" || savedState.route?.platform === "xingtu") state = cloneInitialState();
+    douyin.restore({state,seenVideos,creatorIndex});
     feigua.restore(saved);
     huxuanConfig={...huxuanConfig,...saved.draHuxuanConfig};
     huxuan.restore(saved);
@@ -420,7 +541,6 @@ async function initialize() {
     kuaishou.restore(saved);
     bilibili.restore(saved);
     bilibiliPopular.restore(saved);
-    if (savedState.route?.platform === "feigua" || savedState.route?.platform === "xingtu") state = cloneInitialState();
     const legacyOutbox = saved[STORAGE_KEYS.outbox] ?? [];
     if (!Array.isArray(legacyOutbox)) throw Error('旧上传队列格式异常，原始记录已保留');
     await markObservationsUploaded(legacyOutbox.filter(item => ['written','duplicate'].includes(item?.status)).map(item => item.id));
@@ -442,6 +562,7 @@ async function initialize() {
     for (const key of invalidQueuedKeys) {
       if (creatorIndex[key]?.status === "outbox") delete creatorIndex[key];
     }
+    instances.restore(saved[TASK_INSTANCES_KEY],saved[TASK_PROGRESS_KEY]);
     await persistOutboxChanges();
     await chrome.storage.local.set({
       [STORAGE_KEYS.settings]: settings,
@@ -460,6 +581,7 @@ async function initialize() {
     await feigua.timers();
     await xingtu.timers();
     await huxuan.timers();
+    for(const entry of instances.values()){await entry.runtime.timers();await syncInstanceSchedule(entry);}
     await kuaishou.timers();
     await bilibili.timers();
     await bilibiliPopular.timers();
@@ -573,7 +695,8 @@ async function persistWorkData() {
     ...bilibili.storage(),
     ...bilibiliPopular.storage(),
     [STORAGE_KEYS.cloudAuth]: cloudAuth,
-    [STORAGE_KEYS.pairing]: pairing
+    [STORAGE_KEYS.pairing]: pairing,
+    ...instances.storage()
   });
   chrome.runtime.sendMessage({type:"DRA_STATUS_CHANGED"}).catch(()=>undefined);
   });
@@ -588,10 +711,6 @@ async function persistCloudAuth() {
   });
 }
 
-function increment(name, amount = 1) {
-  state.stats[name] = Number(state.stats[name] || 0) + amount;
-}
-
 function recordDecision(decision = {}, observation = {}, profile = null, owner = state) {
   const num = (value) => {
     if (value == null || typeof value === 'string' && !value.trim()) return null;
@@ -601,6 +720,7 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
   const sourcePlatform = normalizeSourcePlatform(owner.route?.platform || observation.sourcePlatform || observation.platform || "douyin");
   const entry = {
     id: crypto.randomUUID(),
+    taskId:owner.taskId || taskConfigPlatform(owner), taskName:owner.taskName || '默认任务',
     runId: owner.runId || "",
     runStartedAt: owner.startedAt || "",
     sourcePlatform,
@@ -638,9 +758,10 @@ async function withXingtuCreatorDetails(items) {
 
 function addOutbox(status, payload, error = "", { transitionPending = false, owner = state, captureRules = false } = {}) {
   reserveQueue(1);
+  if(payload?.rpa_feedback){payload.rpa_feedback.task_id=owner.taskId || taskConfigPlatform(owner);payload.rpa_feedback.task_name=owner.taskName || '默认任务';payload.rpa_feedback.rule_match ||=captureRuleMatch({},owner,owner.route?.platform);}
   const configPlatform=taskConfigPlatform(owner);
   if (captureRules && payload?.rpa_feedback) {
-    payload.rpa_feedback.rule_context={platform:configPlatform, rules:structuredClone(owner.runRules || configurationFor(configPlatform).rules), capturedAt:new Date().toISOString()};
+    payload.rpa_feedback.rule_context={platform:instances.get(configPlatform)?.platform || configPlatform, rules:structuredClone(owner.runRules || configurationFor(configPlatform).rules), capturedAt:new Date().toISOString()};
     payload.rpa_feedback.rule_match ||= captureRuleMatch({code:payload.rpa_feedback.finder_decision},owner,payload.rpa_feedback.source_platform);
   }
   const item = {
@@ -706,252 +827,6 @@ async function reportCompanySsoRequired(owner = null) {
   if (owner && owner !== state) owner.lastError = COMPANY_SSO_REQUIRED_MESSAGE;
   await persistWorkData();
   return { status: COMPANY_SSO_REQUIRED_ERROR };
-}
-
-function dwellSecondsFor(observation) {
-  const actual = Number(observation?.dwellSeconds);
-  if (Number.isFinite(actual) && actual >= 0) return actual;
-  return observation?.isLive ? Number(settings.liveDwellSeconds || 3) : Number(settings.dwell?.fixedSeconds || 30);
-}
-
-function observationRecord(observation, profile, { isRelevant, decision, action, score = null, extra = {} }) {
-  return buildObservationRecord({
-    observation,
-    profile,
-    feedIndex: Math.max(1, Number(state.stats.scanned) || 1),
-    runId: state.runId,
-    dwellSeconds: dwellSecondsFor(observation),
-    isRelevant,
-    decision,
-    action,
-    score,
-    extra
-  });
-}
-
-async function enqueueObservation(record) {
-  let item;
-  if (settings.dryRun || !settings.cloud?.enabled) {
-    item = addOutbox(settings.dryRun ? "dry-run" : "cloud-disabled", record, "", { transitionPending: true, captureRules: true });
-  } else if (!cloudAuth?.device_token) {
-    item = addOutbox("write-error", record, "尚未连接研究台", { transitionPending: true, captureRules: true });
-  } else {
-    item = addOutbox("pending", record, "", { transitionPending: true, captureRules: true });
-  }
-  return { queued: true, recordId: item.id };
-}
-
-async function finalizeObservationTransition(recordId, transition = {}) {
-  const item = outbox.find((candidate) => candidate?.payload?.record_id === recordId);
-  if (!item) throw new Error("找不到等待确认翻页结果的观察记录");
-  item.payload = {
-    ...item.payload,
-    before_url: String(transition.beforeUrl || item.payload.before_url || ""),
-    after_url: String(transition.afterUrl || ""),
-    scroll_delta: transition.scrollDelta != null && Number.isFinite(Number(transition.scrollDelta))
-      ? Number(transition.scrollDelta)
-      : null,
-    transition_ok: typeof transition.transitionOk === "boolean" ? transition.transitionOk : null
-  };
-  item.transitionPending = false;
-  touchOutbox(item);
-  await persistWorkData();
-  if (["pending", "write-error"].includes(item.status)) void requestUpload();
-  return { ok: true, recordId };
-}
-
-async function settleInterruptedTransitions() {
-  let changed = false;
-  for (const item of outbox) {
-    if (item.sessionId !== state.runId || !item.transitionPending) continue;
-    item.transitionPending = false;
-    item.payload.transition_ok = null;
-    touchOutbox(item);
-    changed = true;
-  }
-  if (changed) await persistWorkData();
-}
-
-async function setPaused(reason, error = "") {
-  const now = Date.now();
-  state.elapsedMs = elapsedRunMs(state, now);
-  state.activeSince = null;
-  if (state.status !== "paused") state.pausedAt = now;
-  state.status = "paused";
-  runWaits.cancel();
-  state.endedAt = new Date().toISOString();
-  state.startupStage = "";
-  state.pauseReason = reason;
-  state.lastError = error || state.lastError;
-  syncPower();
-  await chrome.alarms.clear(WATCHDOG_ALARM);
-  await chrome.alarms.clear(RUN_STOP_ALARM);
-  if (state.feedTabId) {
-    chrome.tabs.sendMessage(state.feedTabId, { type: "DRA_STOP_LOOP", loopId: state.loopId, preserveRunId: true }).catch(() => undefined);
-  }
-  await detachDebugger(state.feedTabId);
-  await settleInterruptedTransitions();
-  await persistState();
-}
-
-async function pauseForRunLimit(reason) {
-  if (state.runTrigger === "schedule") {
-    state.lastScheduleAt = new Date().toISOString();
-    state.lastScheduleResult = reason;
-  }
-  await setPaused(reason);
-  void requestUpload();
-}
-
-async function ensureDebugger(tabId) {
-  if (!Number.isInteger(tabId)) throw new Error("缺少当前推荐流标签页");
-  if (attachedDebuggerTabs.has(tabId)) return;
-  // A worker restart loses the Set while Chrome can retain our attachment.
-  if (state.feedTabId === tabId && state.status === "running") {
-    const owned = await chrome.debugger.sendCommand({ tabId }, "Page.getFrameTree").then(() => true, () => false);
-    if (owned) { attachedDebuggerTabs.add(tabId); return; }
-  }
-  try {
-    await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
-  } catch (error) {
-    const message = error?.message || String(error);
-    if (/debugger|attach|target is already/i.test(message)) {
-      throw new Error("当前抖音标签页正被 F12 或其他调试工具占用，请关闭调试工具后重试");
-    }
-    throw error;
-  }
-  attachedDebuggerTabs.add(tabId);
-}
-
-async function keepFeedPageActive(tabId) {
-  if (state.route?.platform === "feigua") {
-    await chrome.tabs.update(tabId, { autoDiscardable: false });
-    state.keepAliveAt = new Date().toISOString();
-    return;
-  }
-  const runId = state.runId;
-  const apply = async () => {
-    await ensureDebugger(tabId);
-    await chrome.tabs.update(tabId, { autoDiscardable: false });
-    await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true });
-    await chrome.debugger.sendCommand({ tabId }, "Page.setWebLifecycleState", { state: "active" });
-  };
-  try { await apply(); } catch (error) {
-    if (!isActiveRunStatus() || state.runId !== runId) throw error;
-    attachedDebuggerTabs.delete(tabId);
-    await apply();
-  }
-  state.keepAliveAt = new Date().toISOString();
-}
-
-async function detachDebugger(tabId) {
-  if (!Number.isInteger(tabId) || !attachedDebuggerTabs.has(tabId)) return;
-  await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => undefined);
-  await chrome.debugger.detach({ tabId }).catch(() => undefined);
-  attachedDebuggerTabs.delete(tabId);
-}
-
-function assertInputGeneration(tabId, loopId) {
-  if (state.status !== "running" || tabId !== state.feedTabId || loopId !== state.loopId) throw new Error("操作所属循环已结束");
-}
-
-async function dispatchTrustedKey(tabId, requestedKey, loopId) {
-  const keys = {
-    Escape: { key: "Escape", code: "Escape", keyCode: 27 },
-    ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
-    r: { key: "r", code: "KeyR", keyCode: 82 },
-    x: { key: "x", code: "KeyX", keyCode: 88 }
-  };
-  const selected = keys[requestedKey];
-  if (!selected) throw new Error("不允许的后台按键");
-  return sendTrustedKey(tabId, selected, loopId);
-}
-
-async function sendTrustedKey(tabId, selected, loopId, beforeSend = () => {}) {
-  if (tabId !== state.feedTabId) throw new Error("按键请求不是来自本轮当前标签页");
-  await ensureDebugger(tabId);
-  const target = { tabId };
-  const common = {
-    key: selected.key,
-    code: selected.code,
-    windowsVirtualKeyCode: selected.keyCode,
-    nativeVirtualKeyCode: selected.keyCode,
-    modifiers: 0
-  };
-  assertInputGeneration(tabId, loopId);
-  beforeSend();
-  await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...common });
-  await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...common });
-  return { ok: true, key: selected.key };
-}
-
-async function validateTrustedPointer(tabId, payload, allowedTargets) {
-  if (state.status !== "running") throw new Error("任务未运行，拒绝后台鼠标操作");
-  if (tabId !== state.feedTabId) throw new Error("鼠标请求不是来自本轮当前标签页");
-  if (!allowedTargets.has(payload?.target)) throw new Error("不允许的后台鼠标目标");
-  const x = Number(payload?.x);
-  const y = Number(payload?.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("后台鼠标坐标无效");
-  await ensureDebugger(tabId);
-  const metrics = await chrome.debugger.sendCommand({ tabId }, "Page.getLayoutMetrics");
-  const viewport = metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
-  const width = Number(viewport.clientWidth);
-  const height = Number(viewport.clientHeight);
-  if (x < 0 || y < 0 || !Number.isFinite(width) || !Number.isFinite(height) || x > width || y > height) {
-    throw new Error("后台鼠标坐标超出当前推荐页视口");
-  }
-  assertInputGeneration(tabId, payload.loopId);
-  return { x: Math.round(x), y: Math.round(y) };
-}
-
-let engagementQueue = Promise.resolve();
-async function performEngagement(tabId, message) {
-  const { action, videoId, loopId } = message;
-  const ledger = state.engagement;
-  if (state.status !== "running" || state.feedTabId !== tabId || state.loopId !== loopId || !canEngage(ledger, action, videoId, loopId)) {
-    return { ok: true, skipped: true, reason: "未启用、非正向结果或配额不足" };
-  }
-  const key = reserveEngagement(ledger, action, videoId, loopId);
-  if (!key) return { ok: true, skipped: true };
-  await persistState();
-  const selected = ENGAGEMENT_KEYS[action];
-  try {
-    await sendTrustedKey(tabId, selected, loopId, () => {
-      if (state.engagement !== ledger || ledger.candidate?.videoId !== videoId || ledger.candidate?.loopId !== loopId) throw new Error("互动所属视频或轮次已变化");
-    });
-    ledger.attempts[key] = "sent";
-    ledger.sent[action] += 1;
-    ledger.lastResult = `已发送 ${selected.key.toUpperCase()} 快捷键，未检查平台结果`;
-    await persistState();
-    return { ok: true, sent: true, key: selected.key };
-  } catch (error) {
-    ledger.attempts[key] = "unknown";
-    ledger.lastResult = "快捷键发送未完成，保留配额且不重试";
-    await persistState();
-    throw error;
-  }
-}
-
-async function dispatchTrustedClick(tabId, payload = {}) {
-  const point = await validateTrustedPointer(tabId, payload, new Set(["comment", "works"]));
-  const target = { tabId };
-  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", ...point, button: "none" });
-  assertInputGeneration(tabId, payload.loopId);
-  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount: 1 });
-  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", buttons: 0, clickCount: 1 });
-  return { ok: true, target: payload.target };
-}
-
-async function dispatchTrustedWheel(tabId, payload = {}) {
-  const point = await validateTrustedPointer(tabId, payload, new Set(["feed"]));
-  const deltaY = Math.max(200, Math.min(2_000, Number(payload.deltaY) || 800));
-  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-    type: "mouseWheel",
-    ...point,
-    deltaX: 0,
-    deltaY
-  });
-  return { ok: true, target: payload.target, deltaY };
 }
 
 function waitForTabComplete(tabId, timeoutMs = 45_000) {
@@ -1034,82 +909,6 @@ async function configureOpenTabSidePanels() {
   }));
 }
 
-async function requireFeedTab(tabId, { requireActive = true, requireFocused = true } = {}) {
-  if (!Number.isInteger(tabId)) throw new Error("无法识别当前标签页，请重新打开侧边栏");
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || !Number.isInteger(tab.id)) throw new Error("当前标签页已关闭");
-  if (!isRecommendationFeedUrl(tab.pendingUrl || tab.url || "")) {
-    throw new Error("请在抖音推荐页打开侧边栏后启动");
-  }
-  if (requireActive && !tab.active) throw new Error("只能在当前活动标签页启动");
-  if (requireFocused) {
-    const windowInfo = await chrome.windows.get(tab.windowId).catch(() => null);
-    if (!windowInfo?.focused) throw new Error("只能在当前浏览器窗口的活动标签页启动");
-  }
-  return tab;
-}
-
-async function prepareFeedTab(tabId, runTrigger) {
-  const scheduled = runTrigger === "schedule";
-  let tab = await requireFeedTab(tabId, { requireActive: !scheduled, requireFocused: !scheduled });
-  tab = await waitForTabComplete(tab.id);
-  tab = await ensureContentRuntime(tab);
-  await keepFeedPageActive(tab.id);
-  state.feedTabId = tab.id;
-  state.feedWindowId = tab.windowId;
-  state.backgroundMode = scheduled ? "scheduled-tab" : "current-tab";
-  state.pageVisibility = tab.active ? "visible" : "hidden";
-  state.pageHasFocus = tab.active;
-  return tab;
-}
-
-async function findOrCreateFeedTab({ windowId, reuseExisting = true, focusTab = true } = {}) {
-  if (!Number.isInteger(windowId)) throw new Error("无法识别当前浏览器窗口");
-  let tab = null;
-  let createdByExtension = false;
-  if (reuseExisting) {
-    const candidates = await chrome.tabs.query({ windowId, url: "https://www.douyin.com/*" });
-    tab = firstRunnableTabInWindow(candidates.filter(tab=>resolveRoute(tab.pendingUrl || tab.url || "")?.platform==='douyin'), windowId);
-  }
-  if (!tab) {
-    tab = await chrome.tabs.create({ windowId, url: launchUrl("douyin", "recommend"), active: focusTab });
-    createdByExtension = true;
-  } else if (focusTab) {
-    tab = await chrome.tabs.update(tab.id, { active: true });
-  }
-  if (!Number.isInteger(tab?.id)) throw new Error("无法创建抖音推荐页");
-  return { tab, createdByExtension };
-}
-
-async function scheduledFeedTab() {
-  const reuseExisting = settings.schedule?.reuseExistingTab !== false;
-  const previousManagedTabId = state.createdByExtension ? state.feedTabId : null;
-  let tab = null;
-  if (reuseExisting && state.createdByExtension && Number.isInteger(state.feedTabId)) {
-    tab = await requireFeedTab(state.feedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
-  }
-  if (!tab) {
-    if (Number.isInteger(previousManagedTabId)) {
-      await chrome.tabs.remove(previousManagedTabId).catch(() => undefined);
-    }
-    tab = await chrome.tabs.create({ url: launchUrl("douyin", "recommend"), active: false });
-  }
-  if (!Number.isInteger(tab?.id)) throw new Error("无法创建定时任务推荐页");
-  await chrome.tabs.update(tab.id, { autoDiscardable: false });
-  return { tab, createdByExtension: true };
-}
-
-async function applyPageRuntimeState(status = {}) {
-  const tab = await chrome.tabs.get(state.feedTabId).catch(() => null);
-  const windowInfo = tab ? await chrome.windows.get(tab.windowId).catch(() => null) : null;
-  // Focus emulation changes document.visibilityState; report the actual browser UI.
-  state.pageVisibility = tab ? tab.active && windowInfo?.focused && windowInfo.state !== "minimized" ? "visible" : "hidden" : "unknown";
-  state.emulatedVisibility = status.visibilityState || "unknown";
-  state.pageHasFocus = typeof status.hasFocus === "boolean" ? status.hasFocus : state.pageHasFocus;
-  const route = resolveRoute(status.url || "");
-  state.route = route ? { platform: route.platform, surface: route.surface, label: route.label } : null;
-}
-
 async function syncScheduleAlarm(fromMs = Date.now()) {
   for (const item of SCHEDULED_PLATFORMS) {
     await chrome.alarms.clear(item.alarm);
@@ -1121,17 +920,8 @@ async function syncScheduleAlarm(fromMs = Date.now()) {
   }
 }
 
-async function syncRunStopAlarm() {
-  await chrome.alarms.clear(RUN_STOP_ALARM);
-  if (state.stopAt == null) return null;
-  const stopAt = Number(state.stopAt);
-  if (state.status !== "running" || !Number.isFinite(stopAt)) return null;
-  const when = Math.max(Date.now() + 500, stopAt);
-  await chrome.alarms.create(RUN_STOP_ALARM, { when });
-  return when;
-}
-
 async function getScheduleStatus(platform = "douyin") {
+  if(instances.get(platform)){const entry=instances.get(platform),schedule=(entry.platform==='feigua'?entry.config.settings.feiguaSchedule:entry.config.settings.schedule)||{enabled:false};const alarm=await chrome.alarms.get('dra-instance-schedule:'+entry.id);return {...schedule,nextRunAt:alarm?.scheduledTime?new Date(alarm.scheduledTime).toISOString():null,lastRunAt:entry.runtime.state().lastScheduleAt,lastResult:entry.runtime.state().lastScheduleResult || ''};}
   const entry = SCHEDULED_PLATFORMS.find((item) => item.platform === platform) || SCHEDULED_PLATFORMS[0];
   const schedule = platformSchedule(entry.platform) || {};
   const task = scheduleRuntime(entry.platform);
@@ -1401,6 +1191,7 @@ async function checkCloudConnection() {
   }
   if (result.status === 401) {
     cloudAuth.expired = true;
+    await pauseLiveInstances("研究台授权已失效，请重新连接");
     await persistCloudAuth();
     if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
     await pauseLiveBilibili("研究台授权已失效，请重新连接");
@@ -1478,6 +1269,7 @@ async function pollPairing() {
 }
 
 async function disconnectCloud() {
+  await pauseLiveInstances("研究台已断开，请重新连接后继续");
   if(kuaishou.active() && !kuaishou.state().runSettings?.dryRun)await kuaishou.pause("研究台授权已失效，请重新连接");
   await pauseLiveBilibili("研究台授权已失效，请重新连接");
   if (feigua.active() && !feigua.state().runSettings?.dryRun) await feigua.pause("研究台已断开，请重新连接后继续");
@@ -1490,257 +1282,9 @@ async function disconnectCloud() {
   return cloudStatusSnapshot();
 }
 
-function rejectedAction(decision, profileDecision = null) {
-  const uncertainCodes = new Set(["DURATION_MISSING", "LIKES_MISSING"]);
-  const uncertain = decision?.needsReview || uncertainCodes.has(decision?.code) || profileDecision?.needsReview;
-  if (uncertain) return "advance";
-  return settings.markRejectedNotInterested ? "not-interested" : "advance";
-}
-
-function candidatePayload(observation, profile, videoDecision, creatorDecision, score) {
-  const categories = [...(creatorDecision.categories || []), ...(videoDecision.categories || [])]
-    .filter((item, index, items) => items.findIndex((other) => other.id === item.id) === index)
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-  // 当前视频或主页任一侧识别出账号类型即可；两侧都无法识别，或最终仅为 B 级时才需复核。
-  const reviewRequired = score.level === "B" || !score.bestCategory;
-  const recommendationReason = [...videoDecision.reasons, ...creatorDecision.reasons, ...score.reasons].join("；");
-  const reviewReason = !score.bestCategory ? "账号类型未自动识别" : `自动评级为${score.level}级`;
-  return {
-    creatorKey: makeCreatorKey(profile) || makeCreatorKey(observation),
-    platform: "抖音",
-    accountName: profile.authorName || observation.authorName || "",
-    followers: profile.followers,
-    followersText: profile.followersText || String(profile.followers || ""),
-    videoUrl: observation.videoUrl || "",
-    videoId: observation.videoId || "",
-    profileUrl: profile.profileUrl || observation.profileUrl || "",
-    status: "待绑定",
-    priority: reviewRequired ? "B级" : `${score.level}级`,
-    note: reviewRequired ? `需复核：${reviewReason}；自动判断：${recommendationReason}` : "",
-    reviewRequired,
-    source: "抖音推荐流自动找号",
-    caption: observation.caption || "",
-    currentVideoLikes: observation.likes,
-    averageLikes: profile.averageLikes,
-    averageLikesSampleSize: profile.averageLikesSampleSize,
-    category: score.bestCategory?.name || categories[0]?.name || "",
-    audienceInference: score.bestCategory?.audience || categories[0]?.audience || "未知",
-    recommendationLevel: score.level,
-    recommendationScore: score.score,
-    recommendationReason,
-    discoveredAt: observation.observedAt || new Date().toISOString()
-  };
-}
-
-async function handleObservation(observation, profile, panelRecovered = false) {
-  await initialize();
-  if (state.status !== "running") return { continue: false, reason: "任务未运行" };
-  const limitReason = getRunLimitReason(state, settings);
-  if (limitReason) {
-    await pauseForRunLimit(limitReason);
-    return { continue: false, reason: state.pauseReason };
-  }
-  if (observation.blockedReason) {
-    await setPaused(observation.blockedReason);
-    return { continue: false, reason: observation.blockedReason };
-  }
-
-  const fingerprint = observation.videoId || [observation.secUid, observation.caption, observation.subtype].filter(Boolean).join("|");
-  if (!fingerprint) {
-    increment("failed");
-    state.lastError = "当前推荐卡片缺少可去重标识";
-    recordDecision({ code: "NO_FINGERPRINT", reasons: [state.lastError] }, observation, profile);
-    await persistState();
-    return { continue: true, action: "advance", decision: state.lastDecision };
-  }
-  state.engagement.candidate = null;
-  dailyStats = recordDailyScan(dailyStats, fingerprint);
-  if (seenVideos.includes(fingerprint)) {
-    await persistState();
-    return { continue: true, action: "advance", duplicateVideo: true };
-  }
-
-  seenVideos.push(fingerprint);
-  seenVideos = seenVideos.slice(-MAX_SEEN_VIDEOS);
-  increment("scanned");
-  if (observation.contentType === "video" && !contentSkipDecision(observation)) state.engagement.videos += 1;
-  if (panelRecovered) increment("panelRecoveries");
-  state.lastTickAt = new Date().toISOString();
-  state.lastVideoId = observation.videoId || fingerprint;
-
-  const videoDecision = evaluateVideoRules(observation, rules);
-  if (videoDecision.blocked) {
-    recordDecision(videoDecision, observation, profile);
-    await setPaused(videoDecision.reasons.join("；"));
-    return { continue: false, decision: videoDecision };
-  }
-  const contentSkip = contentSkipDecision(observation);
-  if (contentSkip) {
-    increment(contentSkip.counter);
-    recordDecision(videoDecision, observation, profile);
-    const queued = await enqueueObservation(observationRecord(observation, profile, {
-      isRelevant: false,
-      decision: "skip",
-      action: "skip",
-      extra: { finderDecision: videoDecision.code, reasons: videoDecision.reasons || [] }
-    }));
-    await persistWorkData();
-    await persistState();
-    return { continue: true, action: "advance", decision: videoDecision, observationRecordId: queued.recordId };
-  }
-  if (!videoDecision.matched) {
-    const action = rejectedAction(videoDecision);
-    if (action === "not-interested") increment("notInterested");
-    else if (videoDecision.needsReview) increment("failed");
-    recordDecision(videoDecision, observation, profile);
-    const queued = await enqueueObservation(observationRecord(observation, profile, {
-      isRelevant: false,
-      decision: "skip",
-      action: action === "not-interested" ? "not_interested" : "skip",
-      extra: { finderDecision: videoDecision.code, reasons: videoDecision.reasons || [] }
-    }));
-    await persistWorkData();
-    await persistState();
-    return { continue: true, action, decision: videoDecision, observationRecordId: queued.recordId };
-  }
-
-  if (!profile?.ready || !makeCreatorKey(profile)) {
-    await setPaused("当前达人侧栏数据不完整，已停止以避免误判");
-    return { continue: false, reason: state.pauseReason };
-  }
-  if (isInvalidStoredCreatorName(profile.authorName || observation.authorName)) {
-    increment("failed");
-    recordDecision({
-      code: "INVALID_CREATOR_NAME_SKIPPED",
-      reasons: ["检测到页面导航文案而非达人昵称，已跳过且未上传"],
-      accountName: profile.authorName || observation.authorName || ""
-    }, observation, profile);
-    await persistWorkData();
-    await persistState();
-    return { continue: true, action: "advance", decision: state.lastDecision };
-  }
-  const creatorDecision = evaluateCreatorRules(profile, rules);
-  if (!creatorDecision.matched) {
-    increment("rejectedProfiles");
-    const action = rejectedAction(videoDecision, creatorDecision);
-    if (action === "not-interested") increment("notInterested");
-    recordDecision(creatorDecision, observation, profile);
-    const queued = await enqueueObservation(observationRecord(observation, profile, {
-      isRelevant: false,
-      decision: "skip",
-      action: action === "not-interested" ? "not_interested" : "skip",
-      extra: { finderDecision: creatorDecision.code, reasons: creatorDecision.reasons || [] }
-    }));
-    await persistWorkData();
-    await persistState();
-    return { continue: true, action, decision: creatorDecision, observationRecordId: queued.recordId };
-  }
-
-  const categories = [...(creatorDecision.categories || []), ...(videoDecision.categories || [])]
-    .filter((item, index, items) => items.findIndex((other) => other.id === item.id) === index);
-  const score = scoreCreator({ profile, observation, categories, risks: creatorDecision.risks || videoDecision.risks || [], rules });
-  const matchedReasons = [...videoDecision.reasons, ...creatorDecision.reasons, ...score.reasons];
-  if (!new Set(["S", "A", "B"]).has(score.level)) {
-    increment("rejectedProfiles");
-    if (settings.markRejectedNotInterested) increment("notInterested");
-    recordDecision({ code: "LEVEL_B_REVIEW", reasons: score.reasons }, observation, profile);
-    const queued = await enqueueObservation(observationRecord(observation, profile, {
-      isRelevant: false,
-      decision: "skip",
-      action: settings.markRejectedNotInterested ? "not_interested" : "skip",
-      score,
-      extra: { finderDecision: "LEVEL_B_REVIEW", reasons: score.reasons || [] }
-    }));
-    await persistWorkData();
-    await persistState();
-    return { continue: true, action: settings.markRejectedNotInterested ? "not-interested" : "advance", decision: state.lastDecision, observationRecordId: queued.recordId };
-  }
-
-  increment("matched");
-  const payload = candidatePayload(observation, profile, videoDecision, creatorDecision, score);
-  const creatorKey = payload.creatorKey;
-  const existing = creatorIndex[creatorKey];
-  const engagementEligible = categories.length > 0 && !payload.reviewRequired;
-  if (engagementEligible) state.engagement.candidate = { videoId: observation.videoId, creatorKey, loopId: state.loopId };
-  const queued = await enqueueObservation(observationRecord(observation, profile, {
-    isRelevant: true,
-    decision: "keep",
-    action: "watch_then_next",
-    score,
-    extra: { finderDecision: payload.reviewRequired ? "ACCEPTED_REVIEW" : "ACCEPTED", reasons: matchedReasons,
-      ruleMatch:captureRuleMatch({categories},state,'douyin') }
-  }));
-  if (existing) {
-    increment("duplicates");
-    existing.lastSeenAt = new Date().toISOString();
-    existing.sourceVideoId = observation.videoId || existing.sourceVideoId;
-  } else {
-    creatorIndex[creatorKey] = {
-      status: "indexed",
-      lastSeenAt: new Date().toISOString(),
-      sourceVideoId: payload.videoId
-    };
-    increment("newCreators");
-    if (payload.reviewRequired) increment("reviewQueued");
-  }
-  recordDecision({
-    code: payload.reviewRequired ? "ACCEPTED_REVIEW" : "ACCEPTED",
-    reasons: [score.level, ...(payload.reviewRequired ? ["已保存为候选，需人工确认"] : []), ...matchedReasons],
-    categories,
-    accountName: payload.accountName
-  }, observation, profile);
-  await persistWorkData();
-  await persistState();
-  return { continue: state.status === "running", action: "advance", engagementActions: engagementEligible ? ["like", "collect", "follow"].filter(action => canEngage(state.engagement, action, observation.videoId, state.loopId)) : [], decision: state.lastDecision, observationRecordId: queued.recordId };
-}
-
-async function handlePanelSkipped(observation, reason) {
-  await initialize();
-  if (state.status !== "running") return { continue: false, reason: "任务未运行" };
-  const limitReason = getRunLimitReason(state, settings);
-  if (limitReason) {
-    await pauseForRunLimit(limitReason);
-    return { continue: false, reason: state.pauseReason };
-  }
-
-  const fingerprint = observation.videoId || [observation.secUid, observation.caption, observation.subtype].filter(Boolean).join("|");
-  dailyStats = recordDailyScan(dailyStats, fingerprint);
-  if (fingerprint && seenVideos.includes(fingerprint)) {
-    await persistState();
-    return { continue: true, action: "advance", duplicateVideo: true };
-  }
-  if (fingerprint) {
-    seenVideos.push(fingerprint);
-    seenVideos = seenVideos.slice(-MAX_SEEN_VIDEOS);
-    increment("scanned");
-  }
-  increment("panelSkipped");
-  increment("failed");
-  state.lastTickAt = new Date().toISOString();
-  state.lastVideoId = observation.videoId || fingerprint || state.lastVideoId;
-  state.lastError = reason || "当前达人侧栏无法读取，已跳过本条";
-  recordDecision({
-    code: "PANEL_UNREADABLE_SKIPPED",
-    reasons: [state.lastError],
-    accountName: observation.authorName || ""
-  }, observation);
-  let observationRecordId = null;
-  if (fingerprint) {
-    const queued = await enqueueObservation(observationRecord(observation, null, {
-      isRelevant: false,
-      decision: "skip",
-      action: "skip",
-      extra: { finderDecision: "PANEL_UNREADABLE_SKIPPED", reasons: [state.lastError] }
-    }));
-    observationRecordId = queued.recordId;
-  }
-  await persistWorkData();
-  await persistState();
-  return { continue: true, action: "advance", decision: state.lastDecision, observationRecordId };
-}
-
 async function saveConfiguration(message) {
   const platform = message.platform || 'douyin';
+  if(instances.get(platform))return saveInstanceConfiguration(instances.get(platform),message);
   if (!['douyin','kuaishou','bilibili','bilibili-popular','feigua','xingtu'].includes(platform)) throw new Error('请选择具体平台后修改设置');
   const configPlatform = platform;
   if (configPlatform === 'xingtu') {
@@ -1796,302 +1340,6 @@ async function saveConfiguration(message) {
     if (scheduleChanged) await syncScheduleAlarm();
   }
   return {ok:true,configPlatform:configPlatform,...next,problems};
-}
-
-async function startRun({ trigger = "manual", scheduledFor = null, tabId = null } = {}) {
-  await initialize();
-  const problems = [...validateSettings(settings), ...validateRules(rules), ...validateSchedule(settings.schedule)];
-  if (problems.length) throw new Error(problems.join("；"));
-  if (!settings.dryRun) {
-    await checkCloudConnection();
-    if (!settings.cloud?.enabled) {
-      settings.cloud = { ...settings.cloud, enabled: true };
-      await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
-    }
-  }
-  let requested;
-  if (trigger === "schedule") {
-    requested = await scheduledFeedTab();
-  } else {
-    const current = await chrome.tabs.get(tabId);
-    if (isRecommendationFeedUrl(current.pendingUrl || current.url || "")) {
-      const tab = await requireFeedTab(tabId);
-      requested = { tab, createdByExtension: state.createdByExtension === true && state.feedTabId === tab.id };
-    } else {
-      const route = resolveRoute(current.pendingUrl || current.url || "");
-
-      requested = await findOrCreateFeedTab({ windowId: current.windowId, reuseExisting: true, focusTab: true });
-      requested.createdByExtension ||= state.createdByExtension === true && state.feedTabId === requested.tab.id;
-    }
-  }
-  const requestedTab = requested.tab;
-  if (isActiveRunStatus() && state.feedTabId === requestedTab.id) return state;
-  if (isActiveRunStatus() && state.feedTabId !== requestedTab.id) {
-    const previousTabId = state.feedTabId;
-    const closePreviousTab = state.createdByExtension === true;
-    await setPaused("已切换到新的当前标签页");
-    if (closePreviousTab && Number.isInteger(previousTabId)) {
-      await chrome.tabs.remove(previousTabId).catch(() => undefined);
-    }
-  }
-  if (!isActiveRunStatus() && state.createdByExtension && state.feedTabId !== requestedTab.id) {
-    await chrome.tabs.remove(state.feedTabId).catch(() => undefined);
-  }
-  await prepareFeedbackRules("douyin");
-  const lastScheduleAt = state.lastScheduleAt;
-  const lastScheduleResult = state.lastScheduleResult;
-  state = {
-    ...cloneInitialState(),
-    engagement: newEngagement(settings.engagement),
-    feedTabId: requestedTab.id,
-    feedWindowId: requestedTab.windowId,
-    createdByExtension: requested.createdByExtension,
-    backgroundMode: trigger === "schedule" ? "scheduled-tab" : "current-tab",
-    route: (() => {
-      const route = resolveRoute(requestedTab.pendingUrl || requestedTab.url || "");
-      return route ? { platform: route.platform, surface: route.surface, label: route.label } : null;
-    })(),
-    lastScheduleAt,
-    lastScheduleResult
-  };
-  const effectiveTarget = normalizeRunTarget(trigger === "schedule" ? settings.schedule?.target : settings.target);
-  const runId = crypto.randomUUID();
-  state.status = "starting";
-  state.startupStage = "正在连接研究台并绑定当前标签页";
-  state.runId = runId;
-  state.loopId = crypto.randomUUID();
-  state.runtime = { phase: "idle", deadlineAt: Date.now() + 30_000, recoveryAttempts: 0 };
-  state.runTrigger = trigger === "schedule" ? "schedule" : "manual";
-  state.runTarget = effectiveTarget;
-  state.runDurationMinutes = effectiveTarget.durationMinutes;
-  state.scheduledFor = scheduledFor || null;
-  if (state.runTrigger === "schedule") {
-    state.lastScheduleAt = new Date().toISOString();
-    const targetText = effectiveTarget.mode === "time"
-      ? `${effectiveTarget.durationMinutes} 分钟`
-      : effectiveTarget.mode === "count"
-        ? `${effectiveTarget.maxItems} 条视频`
-        : `${effectiveTarget.durationMinutes} 分钟或 ${effectiveTarget.maxItems} 条视频`;
-    state.lastScheduleResult = `已按计划启动：${targetText}`;
-  }
-  await persistState();
-  try {
-    const tab = await prepareFeedTab(requestedTab.id, state.runTrigger);
-    if (state.status !== "starting" || state.runId !== runId) {
-      await detachDebugger(tab?.id);
-      return state;
-    }
-    state.status = "running";
-    state.startupStage = "";
-    state.pauseReason = "";
-    state.startedAt = new Date().toISOString();
-    state.elapsedMs = 0;
-    state.activeSince = Date.now();
-    state.pausedAt = null;
-    state.stopAt = ["time", "both"].includes(effectiveTarget.mode)
-      ? Date.now() + effectiveTarget.durationMinutes * 60_000
-      : null;
-    if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
-    await syncRunStopAlarm();
-    await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
-    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId });
-    const runtimeStatus = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 2).catch(() => null);
-    if (runtimeStatus) await applyPageRuntimeState(runtimeStatus);
-    await persistState();
-    void requestUpload();
-    return state;
-  } catch (error) {
-    if (state.runId === runId && isActiveRunStatus()) {
-      await setPaused("启动刷号任务失败", error?.message || String(error));
-    }
-    throw error;
-  }
-}
-
-async function resumeRun({ windowId, target } = {}) {
-  await initialize();
-  const runTarget = normalizeRunTarget(target || state.runTarget || {});
-  if (!canResumeRun(state, runTarget)) throw new Error("本轮已结束或达到目标，请开始新一轮");
-  const runId = state.runId;
-  const problems = [...validateSettings(settings), ...validateRules(rules)];
-  if (problems.length) throw new Error(problems.join("；"));
-  if (!settings.dryRun) {
-    await checkCloudConnection();
-    settings.cloud = { ...settings.cloud, enabled: true };
-    await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
-  }
-  if (state.runId !== runId || state.status !== "paused") throw new Error("任务状态已变化，请重试");
-  state.runTarget = runTarget;
-  const previousFeedTabId = state.feedTabId;
-  const elapsedMs = elapsedRunMs(state);
-  const pausedAt = state.pausedAt || Date.parse(state.endedAt || "") || Date.now();
-  const previousRuntime = state.runtime;
-  state.status = "starting";
-  state.startupStage = "正在恢复本轮任务";
-  state.loopId = crypto.randomUUID();
-  state.elapsedMs = elapsedMs;
-  state.activeSince = null;
-  await persistState();
-  try {
-    const stillResuming = () => state.runId === runId && state.status === "starting";
-    let tab = await requireFeedTab(previousFeedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
-    if (!stillResuming()) return state;
-    if (tab && resolveRoute(tab.pendingUrl || tab.url || "")?.platform !== state.route?.platform && state.route?.platform) tab = null;
-    const samePage = Boolean(tab);
-    if (!tab) {
-      // Release a page the user navigated to, including ownership used by Stop.
-      state.feedTabId = null;
-      state.createdByExtension = false;
-      await detachDebugger(previousFeedTabId);
-      if (!stillResuming()) return state;
-      const preferredWindowId = Number.isInteger(windowId) ? windowId : state.feedWindowId;
-      const destinationWindow = Number.isInteger(preferredWindowId)
-        ? await chrome.windows.get(preferredWindowId).catch(() => null) : null;
-      const targetWindowId = destinationWindow?.id ?? (await chrome.windows.getCurrent()).id;
-      if (!stillResuming()) return state;
-      const selected = await findOrCreateFeedTab({ windowId: targetWindowId });
-      if (!stillResuming()) {
-        if (selected.createdByExtension) await chrome.tabs.remove(selected.tab.id).catch(() => undefined);
-        return state;
-      }
-      tab = selected.tab;
-      state.feedTabId = tab.id;
-      state.feedWindowId = tab.windowId;
-      state.createdByExtension = selected.createdByExtension;
-    }
-    if (!stillResuming()) return state;
-    state.startupStage = samePage ? "正在恢复本轮任务" : "正在连接推荐页，保留本轮进度";
-    state.backgroundMode = state.runTrigger === "schedule" ? "scheduled-tab" : "current-tab";
-    await persistState();
-    tab = await waitForTabComplete(tab.id);
-    if (!stillResuming()) return state;
-    tab = await requireFeedTab(tab.id, { requireActive: false, requireFocused: false });
-    tab = await ensureContentRuntime(tab);
-    if (!stillResuming()) return state;
-    tab = await requireFeedTab(tab.id, { requireActive: false, requireFocused: false });
-    await keepFeedPageActive(tab.id);
-    if (!stillResuming()) return state;
-    await applyPageRuntimeState({ url: tab.url, hasFocus: tab.active });
-    if (!stillResuming()) return state;
-    const now = Date.now();
-    const shift = Math.max(0, now - pausedAt);
-    const resume = samePage && previousRuntime?.phase === "dwell" ? {
-      ...previousRuntime,
-      waitUntil: previousRuntime.waitUntil + shift,
-      deadlineAt: previousRuntime.deadlineAt + shift,
-      cycleStartedAt: previousRuntime.cycleStartedAt + shift
-    } : null;
-    state.status = "running";
-    state.activeSince = now;
-    state.pausedAt = null;
-    state.endedAt = null;
-    state.pauseReason = "";
-    state.lastError = "";
-    state.startupStage = "";
-    state.runtime = { phase: "idle", deadlineAt: now + 30_000, recoveryAttempts: 0 };
-    const target = normalizeRunTarget(state.runTarget || {});
-    state.stopAt = ["time", "both"].includes(target.mode) ? now + Math.max(0, target.durationMinutes * 60_000 - elapsedMs) : null;
-    if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
-    await syncRunStopAlarm();
-    await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 0.5 });
-    await persistState();
-    await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId, resume });
-    void requestUpload();
-    return state;
-  } catch (error) {
-    if (state.runId === runId && isActiveRunStatus()) await setPaused("恢复本轮失败", error?.message || String(error));
-    throw error;
-  }
-}
-
-async function stopRun() {
-  await initialize();
-  const feedTabId = state.feedTabId;
-  const closeFeedTab = state.createdByExtension === true;
-  state.elapsedMs = elapsedRunMs(state);
-  state.activeSince = null;
-  state.status = "stopped";
-  runWaits.cancel();
-  if (feedTabId) await sendTabMessage(feedTabId, { type: "DRA_STOP_LOOP" }, 1).catch(() => undefined);
-  await chrome.alarms.clear(WATCHDOG_ALARM);
-  await chrome.alarms.clear(RUN_STOP_ALARM);
-  syncPower();
-  await detachDebugger(feedTabId);
-  await settleInterruptedTransitions();
-  state.status = "stopped";
-  state.endedAt = new Date().toISOString();
-  state.startupStage = "";
-  state.pageVisibility = "";
-  state.pageHasFocus = null;
-  state.pauseReason = "";
-  if (closeFeedTab) {
-    state.feedTabId = null;
-    state.feedWindowId = null;
-    state.createdByExtension = false;
-    state.backgroundMode = "";
-  }
-  if (closeFeedTab && Number.isInteger(feedTabId)) {
-    await chrome.tabs.remove(feedTabId).catch(() => undefined);
-  }
-  void requestUpload();
-  await persistState();
-  return state;
-}
-
-async function restartContentLoop(tab, reason) {
-  const runId = state.runId;
-  const oldLoopId = state.loopId;
-  const resume = state.runtime?.phase === "dwell" ? { ...state.runtime } : null;
-  const attempts = Number(state.runtime?.recoveryAttempts || 0) + 1;
-  if (attempts > 2) return setPaused(`后台任务恢复失败：${reason}`);
-  // Invalidate the previous generation before asking the page to stop it.
-  state.loopId = crypto.randomUUID();
-  runWaits.cancel();
-  await settleInterruptedTransitions();
-  state.runtime = { ...state.runtime, phase: "idle", deadlineAt: Date.now() + 30_000, recoveryAttempts: attempts, recoveryReason: reason };
-  await persistState();
-  await sendTabMessage(tab.id, { type: "DRA_STOP_LOOP", loopId: oldLoopId }, 1).catch(() => undefined);
-  await keepFeedPageActive(tab.id);
-  if (state.status !== "running" || state.runId !== runId) return;
-  await sendTabMessage(tab.id, { type: "DRA_START_LOOP", settings, rules, runId, loopId: state.loopId, resume }, 2);
-}
-
-function watchdog() {
-  if (watchdogInFlight) return watchdogInFlight;
-  watchdogInFlight = inspectRuntime().finally(() => { watchdogInFlight = null; });
-  return watchdogInFlight;
-}
-
-async function inspectRuntime() {
-  await initialize();
-  if (state.status !== "running") return;
-  const runId = state.runId;
-  const limitReason = getRunLimitReason(state, settings);
-  if (limitReason) return pauseForRunLimit(limitReason);
-  const tab = await requireFeedTab(state.feedTabId, { requireActive: false, requireFocused: false }).catch(() => null);
-  if (!tab || state.route?.platform && resolveRoute(tab.pendingUrl || tab.url || "")?.platform !== state.route.platform) return setPaused("当前运行标签页已关闭或离开原平台采集页");
-  await keepFeedPageActive(tab.id);
-  if (settings.keepSystemAwake) chrome.power.requestKeepAwake("system");
-  const status = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 1).catch(() => null);
-  if (state.status !== "running" || state.runId !== runId) return;
-  if (status) await applyPageRuntimeState(status);
-  if (!status?.running || status.runId !== runId || status.loopId !== state.loopId || runtimeStalled(state.runtime)) {
-    await restartContentLoop(tab, runtimeStalled(state.runtime) ? "当前步骤超时且没有完成进展" : "页面循环中断");
-  }
-  await persistState();
-  void requestUpload();
-}
-
-async function handleRunStopAlarm() {
-  await initialize();
-  if (state.status !== "running") return;
-  const limitReason = getRunLimitReason(state, settings);
-  if (limitReason) {
-    await pauseForRunLimit(limitReason);
-    return;
-  }
-  // 极端情况下系统时钟发生调整，重新按当前 stopAt 校准一次。
-  await syncRunStopAlarm();
 }
 
 async function handleScheduledAlarm(alarm) {
@@ -2169,6 +1417,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if(alarm.name.startsWith('dra-instance-')){void initialize().then(async()=>{const entry=instanceForAlarm(alarm.name);if(!entry)return;if(alarm.name.startsWith('dra-instance-schedule:')){await syncInstanceSchedule(entry,Math.max(Date.now(),alarm.scheduledTime+1000));const schedule=entry.platform==='feigua'?entry.config.settings.feiguaSchedule:entry.config.settings.schedule;if(!schedule?.enabled || entry.runtime.active() || Date.now()-alarm.scheduledTime>Number(schedule.lateToleranceMinutes || 0)*60000)return;const win=await chrome.windows.getLastFocused({windowTypes:['normal']});if(['feigua','xingtu','huxuan'].includes(entry.platform)){const tab=await entry.runtime.openPage({windowId:win.id,focusTab:false});await entry.runtime.start(tab.id);}else await entry.runtime.start({trigger:'schedule',windowId:win.id,focus:false,reuseExisting:false,target:schedule.target});}else await entry.runtime.inspect();}).catch(error=>{const entry=instanceForAlarm(alarm.name);if(entry)void entry.runtime.pause(error.message);});return;}
   if(alarm.name === "dra-rule-sync") initialize().then(()=>ruleSync.sync()).catch(()=>undefined);
   if (alarm.name === "dra-observations-cleanup") {
     initialize().then(()=>cleanupStoredObservations()).then(()=>chrome.runtime.sendMessage({type:"DRA_STATUS_CHANGED"})).catch(()=>undefined);
@@ -2197,27 +1446,30 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
   const launcher=ensureTabLauncher(tabId);
   const navigation=chrome.tabs.get(tabId).then(async tab=>{
     await initialize();
-    if(resolveRoute(tab.url || '')?.platform==='feigua' && /#\/(video-detail|blogger-detail)\//.test(tab.url || '') && feigua.active())await feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
-    if(resolveRoute(tab.url || '')?.platform==='xingtu' && resolveRoute(tab.url || '')?.surface==='creator' && xingtu.active())await xingtu.pause('你已进入星图达人主页，自动翻页已暂停');
+    await pauseCatalogForNavigation('feigua',tab);
+    await pauseCatalogForNavigation('xingtu',tab);
   }).catch(()=>{});
   return Promise.all([launcher,navigation]);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  attachedDebuggerTabs.delete(tabId);
+  profileNetwork.clear(tabId);
+  const entry=instances.forTab(tabId);if(entry?.runtime.active())void entry.runtime.pause('该分身页面已关闭');
+  douyin.detached(tabId);
   if (tabId === kuaishou.state().feedTabId && kuaishou.active()) void kuaishou.pause("快手标签页已关闭");
   if (bilibiliForTab(tabId)?.active()) void bilibiliForTab(tabId).pause("B站标签页已关闭");
-  if (tabId === feigua.state().feedTabId && feigua.active()) void feigua.pause("飞瓜标签页已关闭");
+  if (tabId === feigua.state().feedTabId && tabId===feigua.state().feedTabId && feigua.active()) void feigua.pause("飞瓜标签页已关闭");
   if(tabId===huxuan.state().feedTabId && huxuan.active())void huxuan.pause("互选标签页已关闭");
-  if (tabId === xingtu.state().feedTabId && xingtu.active()) void xingtu.pause("星图标签页已关闭");
+  if (tabId === xingtu.state().feedTabId && tabId===xingtu.state().feedTabId && xingtu.active()) void xingtu.pause("星图标签页已关闭");
   if (tabId === state.feedTabId && isActiveRunStatus()) setPaused("当前运行标签页已关闭").catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const entry=instances.forTab(tabId);if(entry?.runtime.active() && (changeInfo.url || changeInfo.status==='complete'))void entry.runtime.inspect().catch(error=>entry.runtime.pause(error.message));
   if (changeInfo.status === "complete") void ensureTabLauncher(tabId);
   const url = changeInfo.url || tab.url || tab.pendingUrl || "";
-  if (resolveRoute(url)?.platform==='feigua' && /#\/(video-detail|blogger-detail)\//.test(url) && feigua.active()) void feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
-  if (resolveRoute(url)?.platform==='xingtu' && resolveRoute(url)?.surface==='creator' && xingtu.active()) void xingtu.pause('你已进入星图达人主页，自动翻页已暂停');
+  void pauseCatalogForNavigation('feigua',{...tab,id:tabId,url});
+  void pauseCatalogForNavigation('xingtu',{...tab,id:tabId,url});
   if (tabId === kuaishou.state().feedTabId && kuaishou.active() && (changeInfo.url || changeInfo.status === "complete")) void kuaishou.inspect();
   if (bilibiliForTab(tabId)?.active() && (changeInfo.url || changeInfo.status === "complete")) void bilibiliForTab(tabId).inspect();
   if (tabId === feigua.state().feedTabId && feigua.active() && (changeInfo.url || changeInfo.status === "complete")) void feigua.inspect();
@@ -2232,7 +1484,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.debugger.onDetach.addListener((source, reason) => {
-  if (Number.isInteger(source.tabId)) attachedDebuggerTabs.delete(source.tabId);
+  profileNetwork.detach(source.tabId);
+  const entry=instances.forTab(source.tabId);entry?.runtime.detached?.(source.tabId);if(entry?.runtime.active() && reason==='canceled_by_user')void entry.runtime.pause('该分身页面调试连接已断开');
+  douyin.detached(source.tabId);
   if (source.tabId === state.feedTabId && state.status === "running" && reason === "canceled_by_user") {
     setPaused("页面调试连接已由用户或其他调试工具断开，请重新开始任务").catch(() => undefined);
   }
@@ -2251,29 +1505,11 @@ async function stateSnapshotForTab(tabId) {
   };
 }
 
-function requireBoundContentTab(sender, message) {
-  if (!Number.isInteger(sender.tab?.id) || sender.tab.id !== state.feedTabId) {
-    throw new Error("消息不是来自当前运行标签页");
-  }
-  if (state.status !== "running" && message.type !== "DRA_TRANSITION_RESULT") throw new Error("任务已停止");
-  if (!message?.runId || message.runId !== state.runId || !message.loopId || message.loopId !== state.loopId) {
-    throw new Error("消息不属于当前运行任务");
-  }
-}
-
-async function stopAtReachedTarget(result) {
-  if (!result?.continue) return result;
-  const reason = getRunLimitReason(state, settings);
-  if (!reason) return result;
-  await pauseForRunLimit(reason);
-  return { ...result, continue: false, reason };
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Call immediately in the user gesture, before storage/auth initialization.
   if (message?.type === "DRA_OPEN_PANEL") {
     if (!sender.tab || (sender.frameId ?? 0) !== 0 || !/^https?:\/\//.test(sender.url || "")) { sendResponse({ ok:false }); return false; }
-    if (['douyin','kuaishou','bilibili','bilibili-popular','feigua','xingtu','huxuan'].includes(message.platform)) pendingPanelSelections.set(sender.tab.windowId,message.platform);
+    if (TASK_PLATFORMS.includes(message.platform) || instances.get(message.platform)) pendingPanelSelections.set(sender.tab.windowId,message.platform);
     chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(() => {
       chrome.runtime.sendMessage({type:'DRA_PANEL_SELECTION_CHANGED',windowId:sender.tab.windowId}).catch(()=>undefined);
       sendResponse({ok:true});
@@ -2282,28 +1518,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   (async () => {
     await initialize();
+    const entry=instances.forTab(sender.tab?.id);
+    if(entry && (DOUYIN_CONTENT_MESSAGES.includes(message?.type) || ['DRA_KUAISHOU_VIDEO','DRA_BILIBILI_VIDEO','DRA_FEIGUA_PAGE','DRA_FEIGUA_PAGE_TIMEOUT','DRA_FEIGUA_COMPLETE','DRA_XINGTU_PAGE','DRA_XINGTU_COMPLETE','DRA_HUXUAN_PAGE'].includes(message?.type)))return entry.runtime.message(message,sender);
+    if(['DRA_START','DRA_RESUME','DRA_PAUSE','DRA_STOP'].includes(message?.type))return controlTask(message);
+    if (DOUYIN_CONTENT_MESSAGES.includes(message?.type) && sender.tab?.id===state.feedTabId) return douyin.message(message,sender);
     if (sender.tab?.id === kuaishou.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_KUAISHOU_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return kuaishou.message(message,sender);
     if (bilibiliForTab(sender.tab?.id) && ['DRA_WAIT','DRA_PROGRESS','DRA_BILIBILI_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return bilibiliForTab(sender.tab.id).message(message,sender);
     if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_PAGE_TIMEOUT','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
     if (sender.tab?.id === huxuan.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_HUXUAN_PAGE','DRA_TICK_ERROR'].includes(message?.type)) return huxuan.message(message,sender);
     if (sender.tab?.id === xingtu.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_XINGTU_PAGE','DRA_XINGTU_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return xingtu.message(message,sender);
-    if (['DRA_PAUSE','DRA_STOP','DRA_RESUME'].includes(message?.type) && message.runId) {
-      const target = message.platform === 'kuaishou' ? kuaishou.state() : (message.platform === 'bilibili' || message.platform === 'bilibili-popular') ? bilibiliBySelection(message.platform).state() : message.platform === 'feigua' ? feigua.state() : message.platform === 'xingtu' ? xingtu.state() : message.platform === 'huxuan' ? huxuan.state() : state;
-      if (message.runId !== target.runId) throw Error('任务已变化，请刷新状态后重试');
+    if (DOUYIN_CONTENT_MESSAGES.includes(message?.type)) return douyin.message(message,sender);
+    const configuredInstance=instances.get(message.platform);
+    if(configuredInstance && ['DRA_OPEN_FEIGUA','DRA_OPEN_XINGTU','DRA_OPEN_HUXUAN','DRA_SAVE_FEIGUA_CONFIG','DRA_SAVE_XINGTU_CONFIG','DRA_SAVE_HUXUAN_CONFIG'].includes(message?.type)){
+      requireExtensionPage(sender);
+      const platform=message.type.split('_')[2].toLowerCase();
+      if(configuredInstance.platform!==platform)throw Error('分身与所选平台不一致');
+      if(message.type.startsWith('DRA_OPEN_')){const tab=await configuredInstance.runtime.openPage({windowId:message.windowId});return {ok:true,tabId:tab.id};}
+      const save=configQueue.then(()=>saveInstanceCatalog(configuredInstance,message));configQueue=save.catch(()=>undefined);return save;
     }
     switch (message?.type) {
+      case 'DRA_CREATE_TASK':requireExtensionPage(sender);return {ok:true,state:await instances.create(message.platform,message.name)};
+      case 'DRA_RENAME_TASK':requireExtensionPage(sender);return {ok:true,state:await instances.rename(message.taskId,message.name)};
       case 'DRA_FEIGUA_TAKEOVER': {
         requireFeiguaSender(sender);
-        if(sender.tab.id===feigua.state().feedTabId && feigua.active())await feigua.pause('你已接管飞瓜页面，自动翻页已暂停');
+        const task=catalogTaskForTab('feigua',sender.tab.id);if(task?.active())await task.pause('你已接管飞瓜页面，自动翻页已暂停');
         return {ok:true};
       }
       case 'DRA_FEIGUA_BROWSE_ERROR':
         requireFeiguaSender(sender);browseState.lastError=String(message.error || '浏览采集失败').slice(0,500);return {ok:true};
       case 'DRA_FEIGUA_BROWSE_STATUS': {
         requireFeiguaSender(sender);
-        if(/#\/(video-detail|blogger-detail)\//.test(sender.url || '') && feigua.active())await feigua.pause('你已进入飞瓜详情，自动翻页已暂停');
+        await pauseCatalogForNavigation('feigua',{...sender.tab,url:sender.url});
+        const task=catalogTaskForTab('feigua',sender.tab.id);
         browseState.lastCheckedAt=new Date().toISOString();
-        return {ok:true,enabled:browseState.enabled,automaticTab:feigua.active() && sender.tab.id===feigua.state().feedTabId};
+        return {ok:true,enabled:browseState.enabled,automaticTab:!!task?.active()};
       }
       case 'DRA_SET_FEIGUA_BROWSING':
         requireExtensionPage(sender);
@@ -2317,16 +1565,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'DRA_XINGTU_TAKEOVER': {
         requireXingtuSender(sender);
-        if(sender.tab.id===xingtu.state().feedTabId && xingtu.active())await xingtu.pause('你已接管星图页面，自动翻页已暂停');
+        const task=catalogTaskForTab('xingtu',sender.tab.id);if(task?.active())await task.pause('你已接管星图页面，自动翻页已暂停');
         return {ok:true};
       }
       case 'DRA_XINGTU_BROWSE_ERROR':
         requireXingtuSender(sender);xingtuBrowseState.lastError=String(message.error || '浏览采集失败').slice(0,500);return {ok:true};
       case 'DRA_XINGTU_BROWSE_STATUS': {
         requireXingtuSender(sender);
-        if(resolveRoute(sender.url || '')?.surface==='creator' && xingtu.active())await xingtu.pause('你已进入星图达人主页，自动翻页已暂停');
+        await pauseCatalogForNavigation('xingtu',{...sender.tab,url:sender.url});
+        const task=catalogTaskForTab('xingtu',sender.tab.id);
         xingtuBrowseState.lastCheckedAt=new Date().toISOString();
-        return {ok:true,enabled:xingtuBrowseState.enabled,automaticTab:xingtu.active() && sender.tab.id===xingtu.state().feedTabId};
+        return {ok:true,enabled:xingtuBrowseState.enabled,automaticTab:!!task?.active()};
       }
       case 'DRA_SET_XINGTU_BROWSING':
         requireExtensionPage(sender);
@@ -2339,45 +1588,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         xingtuBrowseWrites=work.catch(()=>{});return work;
       }
 
-      case "DRA_WAIT": {
-        requireBoundContentTab(sender, message);
-        if (state.status !== "running") return { ok: false, canceled: true };
-        const until = Number(message.until);
-        if (!Number.isFinite(until) || until > Date.now() + 300_000) throw new Error("无效的等待截止时间");
-        const result = await runWaits.wait(Math.min(until, Date.now() + 30_000));
-        requireBoundContentTab(sender, message);
-        const reason = getRunLimitReason(state, settings);
-        if (state.status === "running" && reason) await pauseForRunLimit(reason);
-        return { ...result, ok: result.ok && state.status === "running" };
-      }
-      case "DRA_PROGRESS": {
-        requireBoundContentTab(sender, message);
-        if (state.status !== "running") return { ok: false, canceled: true };
-        const now = Date.now();
-        const budget = stepBudget(message.phase, settings, message.waitUntil, now);
-        state.runtime = {
-          ...state.runtime, phase: message.phase, deadlineAt: now + budget, progressAt: now,
-          videoId: String(message.videoId || state.runtime?.videoId || ""),
-          cycleStartedAt: message.phase === "read" ? now
-            : message.phase === "dwell" && Number.isFinite(message.cycleStartedAt) && message.cycleStartedAt <= now
-              ? message.cycleStartedAt : state.runtime?.cycleStartedAt,
-          waitUntil: message.phase === "dwell" ? message.waitUntil : null,
-          plannedDwellSeconds: message.plannedDwellSeconds ?? state.runtime?.plannedDwellSeconds
-        };
-        if (message.phase === "submit") {
-          state.runtime.lastReadAt = now;
-          state.runtime.actualDwellSeconds = message.actualDwellSeconds;
-        }
-        if (message.phase === "idle" && message.transitionOk === true) {
-          state.runtime.lastTransitionAt = now;
-          state.runtime.recoveryAttempts = 0;
-        }
-        await persistState();
-        return { ok: true };
-      }
-      case "DRA_RAW_SAMPLE":
-        requireBoundContentTab(sender, message);
-        return {ok:true, samples:await saveRawSample(message.sample)};
       case "DRA_DEBUG_STATUS": {
         requireExtensionPage(sender);
         const saved = await chrome.storage.local.get([STORAGE_KEYS.debugSettings,"draRawSampleError"]);
@@ -2422,11 +1632,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "DRA_GET_STATUS": {
         await flushDecisionHistory();
         const selectedState = await selectedTask(message.tabId, message.platform);
-        const history = await decisionPreview(selectedState.route?.platform || (selectedState === state ? 'douyin' : ''));
+        const history = await decisionPreview(selectedState.route?.platform || (selectedState === state ? 'douyin' : ''),Date.now(),selectedState.taskId || taskConfigPlatform(selectedState));
+        const feigua=instances.get(selectedState.taskId)?.platform==='feigua'?instances.get(selectedState.taskId).runtime:defaultRuntime('feigua');
+        const xingtu=instances.get(selectedState.taskId)?.platform==='xingtu'?instances.get(selectedState.taskId).runtime:defaultRuntime('xingtu');
+        const huxuan=instances.get(selectedState.taskId)?.platform==='huxuan'?instances.get(selectedState.taskId).runtime:defaultRuntime('huxuan');
         return {
           ok: true,
-          state: selectedState,
-          tasks: [douyinTaskSnapshot(), kuaishou.state(), bilibili.state(), bilibiliPopular.state(), feigua.state(), xingtu.state(), huxuan.state()],
+          state: {...selectedState,...(selectedState.route?.platform==='douyin'?{ipCapture:profileNetwork.status(selectedState.feedTabId)}:{})},
+          tasks: taskStates(),
           huxuan:{pageCount:huxuan.collection()?.pages.length || 0,pageNumber:huxuan.state().lastPageNumber || "",finalized:huxuan.collection()?.finalized === true,candidates:huxuan.collection()?.recentRows || []},
           feigua: {
             pageCount:feigua.collection()?.pages?.length || 0,
@@ -2536,53 +1749,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         configQueue=save.catch(()=>undefined);return save;
       }
-      case "DRA_START": {
-        const tab = await chrome.tabs.get(message.tabId);
-        if(message.platform==='kuaishou' || message.platform==='auto' && resolveRoute(tab.pendingUrl || tab.url || '')?.platform==='kuaishou')return {ok:true,state:await kuaishou.start({tabId:tab.id,windowId:tab.windowId})};
-        if(message.platform==='bilibili' || message.platform==='bilibili-popular'){
-          return {ok:true,state:await bilibiliBySelection(message.platform).start({tabId:tab.id,windowId:tab.windowId})};
-        }
-        if(message.platform==='auto' && resolveRoute(tab.pendingUrl || tab.url || '')?.platform==='bilibili'){
-          return {ok:true,state:await bilibiliBySelection('auto', tab.pendingUrl || tab.url || '').start({tabId:tab.id,windowId:tab.windowId})};
-        }
-        if (message.platform === 'feigua') {
-          const destination=await feigua.openPage({windowId:tab.windowId});
-          return {ok:true,state:await feigua.start(destination.id)};
-        }
-        if(message.platform==='huxuan') {const destination=await huxuan.openPage({windowId:tab.windowId});return {ok:true,state:await huxuan.start(destination.id)};}
-        if (message.platform === 'xingtu') {
-          const destination=await xingtu.openPage({windowId:tab.windowId});
-          return {ok:true,state:await xingtu.start(destination.id)};
-        }
-        if (message.platform === "douyin") return {ok:true,state:await startRun({tabId:message.tabId})};
-        const platform = resolveRoute(tab.pendingUrl || tab.url || '')?.platform;
-        if (message.platform && message.platform !== 'auto' && platform !== message.platform) throw Error('请先切换到所选平台的采集页面，再开始该平台任务');
-        return {ok:true,state:platform === 'huxuan' ? await huxuan.start(tab.id) : platform === 'feigua' ? await feigua.start(tab.id) : platform === 'xingtu' ? await xingtu.start(tab.id) : await startRun({tabId:message.tabId})};
-      }
-      case "DRA_RESUME":
-        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.resume({windowId:message.windowId,target:kuaishouConfig.settings.target})};
-        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibiliBySelection(message.platform).resume({windowId:message.windowId,target:configurationFor(message.platform).settings.target})};
-        if(message.platform==="xingtu")return {ok:true,state:await xingtu.resume({windowId:message.windowId})};
-        if(message.platform==="huxuan")return {ok:true,state:await huxuan.resume({windowId:message.windowId})};
-        return { ok: true, state: message.platform === "feigua" ? await feigua.resume({windowId:message.windowId}) : await resumeRun({ windowId: message.windowId, target:settings.target }) };
-      case "DRA_PAUSE":
-        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.pause()};
-        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibiliBySelection(message.platform).pause()};
-        if (message.platform === "feigua") return {ok:true,state:await feigua.pause()};
-        if (message.platform === "xingtu") return {ok:true,state:await xingtu.pause()};
-        if(message.platform==="huxuan")return {ok:true,state:await huxuan.pause()};
-        if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有正在运行的任务");
-        await setPaused("用户暂停");
-        void requestUpload();
-        return { ok: true, state };
-      case "DRA_STOP":
-        if(message.platform==="kuaishou")return {ok:true,state:await kuaishou.stop()};
-        if(message.platform==="bilibili"||message.platform==="bilibili-popular")return {ok:true,state:await bilibiliBySelection(message.platform).stop()};
-        if (message.platform === "feigua") return {ok:true,state:await feigua.stop()};
-        if (message.platform === "xingtu") return {ok:true,state:await xingtu.stop()};
-        if(message.platform==="huxuan")return {ok:true,state:await huxuan.stop()};
-        if (message.tabId !== state.feedTabId) throw new Error("当前标签页没有可以停止的任务");
-        return { ok: true, state: await stopRun() };
       case "DRA_SYNC_RULES":
         await ruleSync.sync(); return {ok:true,status:ruleSync.status()};
       case "DRA_SAVE_CONFIG": {
@@ -2590,68 +1756,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         configQueue = save.catch(() => undefined);
         return save;
       }
-      case "DRA_DOUYIN_PROFILE_IP": {
-        requireBoundContentTab(sender, message);
-        if (settings.allowProfileIpFallback !== true) return { ok: true, ipLocation: null };
-        const { runId, loopId } = message;
-        const ipLocation = await readDouyinIpLocation({ profileUrl: message.profileUrl,
-          secUid: message.secUid, windowId: state.feedWindowId, runKey: `${runId}:${loopId}`,
-          isCurrent: () => state.status === 'running' && state.runId === runId && state.loopId === loopId });
-        return { ok: true, ipLocation };
-      }
-      case "DRA_OBSERVATION": {
-        requireBoundContentTab(sender, message);
-        try {await saveObservations([normalizeDouyinObservation(message.observation || {},message.profile,state.runId)]);}
-        catch(error){await setPaused(error.message);return {ok:false,continue:false,error:error.message};}
-        const result = await handleObservation(message.observation || {}, message.profile || null, Boolean(message.panelRecovered));
-        return stopAtReachedTarget(result);
-      }
-      case "DRA_PANEL_SKIPPED": {
-        requireBoundContentTab(sender, message);
-        try {await saveObservations([normalizeDouyinObservation(message.observation || {},null,state.runId)]);}
-        catch(error){await setPaused(error.message);return {ok:false,continue:false,error:error.message};}
-        const result = await handlePanelSkipped(message.observation || {}, message.reason || "");
-        return stopAtReachedTarget(result);
-      }
-      case "DRA_TRANSITION_RESULT":
-        requireBoundContentTab(sender, message);
-        return finalizeObservationTransition(message.recordId, message.transition || {});
-      case "DRA_ENGAGE": {
-        requireBoundContentTab(sender, message);
-        const pending = engagementQueue.then(() => performEngagement(sender.tab.id, message));
-        engagementQueue = pending.catch(() => undefined);
-        return pending;
-      }
-      case "DRA_TRUSTED_KEY":
-        requireBoundContentTab(sender, message);
-        return dispatchTrustedKey(sender.tab?.id, message.key, message.loopId);
-      case "DRA_TRUSTED_CLICK":
-        requireBoundContentTab(sender, message);
-        return dispatchTrustedClick(sender.tab?.id, message);
-      case "DRA_TRUSTED_WHEEL":
-        requireBoundContentTab(sender, message);
-        return dispatchTrustedWheel(sender.tab?.id, message);
-      case "DRA_PAGE_BLOCKED":
-      case "DRA_FEED_STALLED":
-        requireBoundContentTab(sender, message);
-        await setPaused(message.reason || "抖音页面需要人工处理");
-        return { ok: true };
-      case "DRA_TICK_ERROR":
-        requireBoundContentTab(sender, message);
-        state.lastError = message.error || "推荐流处理异常";
-        if (Number(message.failureStreak) >= 3) await setPaused(`推荐流连续处理失败：${state.lastError}`, state.lastError);
-        else await persistState();
-        return { ok: true };
       case "DRA_CLEAR_LOCAL_DATA":
-        if (isActiveRunStatus() || kuaishou.active() || bilibiliTasks().some((task) => task.active()) || feigua.active() || xingtu.active() || huxuan.active() || huxuan.collection() && !huxuan.collection().finalized || feigua.collection() && !feigua.collection().finalized || xingtu.collection() && !xingtu.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
+        if (instances.states().some(task=>['running','starting','paused'].includes(task.status)) || isActiveRunStatus() || kuaishou.active() || bilibiliTasks().some((task) => task.active()) || feigua.active() || xingtu.active() || huxuan.active() || huxuan.collection() && !huxuan.collection().finalized || feigua.collection() && !feigua.collection().finalized || xingtu.collection() && !xingtu.collection().finalized) throw new Error("请先结束所有平台任务并保存候选，再清空本地数据");
+        for(const entry of instances.values()){entry.runtime.clear();entry.creators={};}
         feigua.clear();
         xingtu.clear();
         huxuan.clear();
         kuaishou.clear();
         bilibili.clear();
         bilibiliPopular.clear();
-        seenVideos = [];
-        creatorIndex = {};
+        douyin.clear();
         removeOutbox(outbox.map(item => item.id));
         await persistWorkData();
         return { ok: true };
@@ -2675,7 +1789,7 @@ function requireXingtuSender(sender) {
   if(!Number.isInteger(sender.tab?.id) || (sender.frameId ?? 0)!==0 || !/^https:\/\/(?:www\.)?xingtu\.cn\//.test(sender.url || ''))throw Error('消息不是来自星图页面');
 }
 async function captureBrowsePage(page,sender) {
-  if(!browseState.enabled || feigua.active() && sender.tab.id===feigua.state().feedTabId)return {ok:true,skipped:true};
+  if(!browseState.enabled || catalogTaskForTab('feigua',sender.tab.id)?.active())return {ok:true,skipped:true};
   const tab=await chrome.tabs.get(sender.tab.id);
   if(!tab.active)return {ok:true,skipped:true};
   if(!page || page.pageUrl!==tab.url || !['library','video','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>60 || !page.rows.length || JSON.stringify(page).length>500000)throw Error('飞瓜浏览数据不完整或页面已变化');
@@ -2714,7 +1828,7 @@ function stageFeiguaObservations() {
       if(item.sourcePlatform!=='feigua')continue;
       // Leave durable observations waiting while a full outbox drains.
       if(!outbox.some(queued=>queued.id===item.id) && outbox.filter(queued=>!['written','duplicate','dry-run'].includes(queued.status)).length>=MAX_OUTBOX)break;
-      if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',feiguaObservationRecord(item),'',{owner:{runId:item.sessionId,startedAt:item.firstObservedAt}});
+      if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',feiguaObservationRecord(item),'',{owner:observationOwner(item)});
       queuedIds.push(item.id);
     }
     if(queuedIds.length){
@@ -2725,7 +1839,7 @@ function stageFeiguaObservations() {
   return stagingObservations;
 }
 async function captureXingtuBrowsePage(page,sender) {
-  if(!xingtuBrowseState.enabled || xingtu.active() && sender.tab.id===xingtu.state().feedTabId)return {ok:true,skipped:true};
+  if(!xingtuBrowseState.enabled || catalogTaskForTab('xingtu',sender.tab.id)?.active())return {ok:true,skipped:true};
   const tab=await chrome.tabs.get(sender.tab.id);
   if(!tab.active)return {ok:true,skipped:true};
   if(!page || page.pageUrl!==canonicalXingtuPageUrl(tab.url) || !['market','creator'].includes(page.surface) || !Array.isArray(page.rows) || page.rows.length>40 || !page.rows.length || page.rows.some(row=>!/^\d{1,30}$/.test(String(row.xingtuId || ''))) || JSON.stringify(page).length>500000)throw Error('星图浏览数据缺少稳定身份或页面已变化');
@@ -2756,7 +1870,7 @@ function stageXingtuObservations() {
     for(const item of items) {
       if(!['xingtu','huxuan'].includes(item.sourcePlatform))continue;
       if(!outbox.some(queued=>queued.id===item.id) && outbox.filter(queued=>!['written','duplicate','dry-run'].includes(queued.status)).length>=MAX_OUTBOX)break;
-      if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',item.sourcePlatform==='huxuan'?huxuanObservationRecord(item):xingtuObservationRecord(item),'',{owner:{runId:item.sessionId,startedAt:item.firstObservedAt}});
+      if(!outbox.some(queued=>queued.id===item.id))addOutbox('pending',item.sourcePlatform==='huxuan'?huxuanObservationRecord(item):xingtuObservationRecord(item),'',{owner:observationOwner(item)});
       queuedIds.push(item.id);
     }
     if(queuedIds.length){

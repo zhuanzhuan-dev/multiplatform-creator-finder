@@ -3,7 +3,7 @@ import { DecisionRuleMatch } from '../shared/DecisionRuleMatch';
 import { errorMessage } from '../shared/error-message';
 import { useEffect, useRef, useState } from 'react';
 import { decisionMeta, decisionMetricLine, formatLocalDateTime } from '../sidepanel/format';
-import type { Decision } from '../sidepanel/types';
+import type { Decision, RunState } from '../sidepanel/types';
 import { sendRuntime } from '../shared/chrome-runtime';
 import { AccountVideosControl } from '../shared/AccountVideosControl';
 import { SOURCE_PLATFORMS, sourcePlatformLabel } from '../../lib/source-platform.js';
@@ -19,8 +19,9 @@ function DecisionAvatar({decision}:{decision:Decision}) {
   return <img src={decision.avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFailed(true)} />;
 }
 export function DecisionsPage() {
+  const [tasks,setTasks]=useState<RunState[]>([]);
   const [data,setData]=useState<HistoryResponse|null>(null);
-  const [filters,setFilters]=useState({sourcePlatform:'',runId:'',query:'',tone:''});
+  const [filters,setFilters]=useState({sourcePlatform:'',taskId:'',runId:'',query:'',tone:''});
   const [page,setPage]=useState<{cursor:Cursor;previous:Cursor[];asOf?:number}>({cursor:null,previous:[]});
   const [revision,setRevision]=useState(0);
   const [busy,setBusy]=useState(false);
@@ -28,7 +29,9 @@ export function DecisionsPage() {
   const [now,setNow]=useState(Date.now());
   const sequence=useRef(0);
   useEffect(()=>{
-    const refresh=()=>{if(document.visibilityState==='visible'){setRevision(r=>r+1);setNow(Date.now());}};
+    const loadTasks=()=>void sendRuntime<{ok:boolean;tasks:RunState[]}>({type:'DRA_GET_STATUS',platform:'douyin'}).then(result=>setTasks(result.tasks)).catch(()=>undefined);
+    loadTasks();
+    const refresh=()=>{loadTasks();if(document.visibilityState==='visible'){setRevision(r=>r+1);setNow(Date.now());}};
     const listener=(message:{type?:string})=>{if(message.type==='DRA_HISTORY_CHANGED')refresh();};
     chrome.runtime.onMessage.addListener(listener);
     document.addEventListener('visibilitychange',refresh);
@@ -55,7 +58,8 @@ export function DecisionsPage() {
     </section>
     <section className="ledger" aria-labelledby="ledgerTitle" aria-busy={busy}>
       <div className="ledger-toolbar"><div><h2 id="ledgerTitle">处理记录</h2><span>{busy?'读取中…':`匹配 ${data?.total || 0} 条`}</span></div>
-        <label>平台来源<select aria-label="筛选平台来源" value={filters.sourcePlatform} onChange={e=>change({sourcePlatform:e.target.value,runId:''})}><option value="">全部来源</option>{Object.entries(SOURCE_PLATFORMS).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+        <label>平台来源<select aria-label="筛选平台来源" value={filters.sourcePlatform} onChange={e=>change({sourcePlatform:e.target.value,taskId:'',runId:''})}><option value="">全部来源</option>{Object.entries(SOURCE_PLATFORMS).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+        <label>运行任务<select aria-label="筛选运行任务" value={filters.taskId} onChange={e=>change({taskId:e.target.value,runId:''})}><option value="">全部任务</option>{tasks.filter(task=>!filters.sourcePlatform || task.route?.platform===filters.sourcePlatform).map(task=>{const id=task.taskId || (task.route?.platform==='bilibili' && task.route.surface==='popular'?'bilibili-popular':task.route?.platform);return <option key={id} value={id}>{task.route?.label} · {task.taskName || '默认任务'}</option>;})}</select></label>
         <label>轮次<select aria-label="筛选轮次" value={filters.runId} onChange={e=>change({runId:e.target.value})}><option value="">全部轮次</option>{data?.runs.map(run=><option key={run.id} value={run.id}>{formatLocalDateTime(run.startedAt)}</option>)}</select></label>
         <label><span className="visually-hidden">搜索账号或原因</span><input type="search" value={filters.query} placeholder="搜索账号、结果或原因" onChange={e=>change({query:e.target.value})} /></label>
       </div>
@@ -63,7 +67,7 @@ export function DecisionsPage() {
         <thead><tr><th>时间</th><th>平台来源</th><th>账号</th><th>采集内容</th><th>处理结果</th><th>处理依据</th><th><span className="visually-hidden">操作</span></th></tr></thead>
         <tbody>{visible.map((decision,index)=>{const meta=decisionMeta(decision.code);return <tr key={decision.id || index}>
           <td data-label="时间"><time dateTime={decision.occurredAt}>{formatLocalDateTime(decision.occurredAt)}</time></td>
-          <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}</td>
+          <td data-label="平台来源">{sourcePlatformLabel(decision.sourcePlatform)}<small className="creator-meta">{decision.taskName || '默认任务'}</small></td>
           <td data-label="账号"><span className="creator"><DecisionAvatar decision={decision} /><span className="creator-copy"><strong>{decision.accountName || '未识别账号'}</strong>{decision.sourcePlatform === 'douyin' || decision.ipLocationStatus || decision.tname ? <span className="creator-meta"><DecisionIpLocation decision={decision} />{decision.tname ? <small>{decision.tname}</small> : null}</span> : null}</span></span></td>
           <td data-label="采集内容" className="video-cell">
             {decision.sourcePlatform === 'xingtu' ? <div className="video-summary"><strong>达人资料</strong>{decision.authorId ? <span>星图 ID：{decision.authorId}</span> : null}{decision.xingtuCreator ? <>

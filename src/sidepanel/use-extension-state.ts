@@ -167,18 +167,19 @@ export function useExtensionState() {
     setBusyAction(action);
     show("");
     try {
-      const concrete = ["douyin", "kuaishou", "bilibili", "bilibili-popular", "feigua", "xingtu", "huxuan"].includes(selectedPlatform);
+      const concrete = selectedPlatform !== "auto";
       const route = snapshot?.state?.route;
       const inferred = route?.platform === "bilibili" && route?.surface === "popular" ? "bilibili-popular" : route?.platform;
-      const platform = concrete ? selectedPlatform : (inferred || "auto");
+      const platform = concrete ? selectedPlatform : (snapshot?.configPlatform || inferred || "auto");
+      const catalog = ["feigua", "xingtu", "huxuan"].includes(route?.platform || platform);
       if (action === "start") {
         show("正在连接研究台并绑定当前标签页…");
-        if (!["feigua", "xingtu", "huxuan"].includes(platform) && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
+        if (!catalog && !["running", "starting"].includes(snapshot?.state?.status || "")) await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_START", tabId: tab.id, platform });
       } else if (action === "resume") {
         show("正在按目标恢复本轮，保留已有计数与记录…");
-        if (!["feigua", "xingtu", "huxuan"].includes(platform)) await saveSettings(draft);
+        if (!catalog) await saveSettings(draft);
         const tab = await getPanelTab();
         await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform, runId: snapshot?.state?.runId });
       } else if (action === "pause") {
@@ -290,14 +291,27 @@ export function useExtensionState() {
 
   const openFeigua = async () => {
     setBusyAction('open');
-    try { const tab=await getPanelTab(); await sendRuntime({type:'DRA_OPEN_FEIGUA',windowId:tab.windowId}); await refresh(); }
+    try { const tab=await getPanelTab(); await sendRuntime({type:'DRA_OPEN_FEIGUA',windowId:tab.windowId,platform:snapshot?.configPlatform}); await refresh(); }
     catch(error){show(error instanceof Error?error.message:String(error),true);}
     finally {setBusyAction('');}
   };
   const openXingtu = async () => {
     setBusyAction('open');
-    try { const tab=await getPanelTab(); await sendRuntime({type:'DRA_OPEN_XINGTU',windowId:tab.windowId}); await refresh(); }
+    try { const tab=await getPanelTab(); await sendRuntime({type:'DRA_OPEN_XINGTU',windowId:tab.windowId,platform:snapshot?.configPlatform}); await refresh(); }
     catch(error){show(error instanceof Error?error.message:String(error),true);}
+    finally {setBusyAction('');}
+  };
+  const createTask = async (platform: string, name: string) => {
+    setBusyAction('create');
+    try {
+      const response = await sendRuntime<{ok:boolean;state:{taskId:string}}>({type:'DRA_CREATE_TASK',platform,name});
+      setSelectedPlatform(response.state.taskId);
+      show(`已创建“${name}”，可设置独立规则后开始`);
+    } finally {setBusyAction('');}
+  };
+  const renameTask = async (taskId: string, name: string) => {
+    setBusyAction('rename');
+    try {await sendRuntime({type:'DRA_RENAME_TASK',taskId,name});await refresh();show('分身已改名，历史记录保留采集时的名称');}
     finally {setBusyAction('');}
   };
   const openWorkbench = async () => {
@@ -307,6 +321,7 @@ export function useExtensionState() {
 
   return {
     snapshot,
+    createTask, renameTask,
     selectedPlatform, setSelectedPlatform,
     settingsNotice,
     openWorkbench,

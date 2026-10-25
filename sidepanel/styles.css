@@ -452,4 +452,28 @@ button.icon-button { display: grid; place-items: center; width: 2.75rem; height:
 .platform-trigger .platform-logo.feigua img { width:4.5rem; }
 .platform-popover { position:absolute;top:calc(100% + .5rem);right:0;z-index:50;width:min(20rem,100%);max-height:min(28rem,calc(100dvh - 10rem));overflow:auto;padding:1rem;border:1px solid var(--line);border-radius:.875rem;background:var(--surface);box-shadow:0 .5rem 1.75rem #0002; }
 .platform-popover[hidden] { display:none; }
-.platform-popover .platform-row { padding:.875rem;font-size:.8125rem;white-space:normal; }
+.platform-popover .platform-row { min-height:3rem;padding:.375rem .75rem;gap:.5rem;font-size:.8125rem;white-space:normal; }
+
+.platform-trigger-name {max-width:7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.platform-group + .platform-group {border-top:1px solid var(--line);}
+.platform-popover .platform-logo {width:1.25rem;height:1.25rem;}
+.platform-popover .platform-logo.feigua img {width:5rem;}
+.platform-popover .platform-copy {gap:.125rem;}
+.platform-popover .platform-copy strong {font-size:.8125rem;line-height:1.35;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.platform-popover .platform-copy > span {font-size:.6875rem;line-height:1.4;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.platform-row[data-current="true"]:not([aria-expanded="true"]) {background:color-mix(in srgb,var(--blue) 9%,var(--surface));}
+.platform-clone-count {flex-shrink:0;font-size:.6875rem;color:var(--muted);}
+.platform-chevron {font-size:1rem;}
+.platform-row[aria-expanded="true"] .platform-chevron {transform:rotate(180deg);}
+.task-instance-list {margin-left:1.375rem;border-left:1px solid var(--line);}
+.task-instance-row {display:flex;align-items:center;border-top:1px solid var(--line-soft);}
+.platform-popover .task-instance-row .platform-row {min-width:0;min-height:2.75rem;padding:.375rem .75rem;}
+.platform-footer {display:flex;justify-content:flex-end;padding-top:.5rem;}
+.platform-footer .task-add,.task-rename {min-height:1.5rem;padding:.125rem .375rem;border:0;border-radius:.25rem;background:transparent;color:var(--muted);font-size:.75rem;box-shadow:none;}
+.platform-footer .task-add:hover:enabled,.task-rename:hover:enabled {color:var(--blue);box-shadow:none;}
+.task-rename {margin-right:.5rem;flex-shrink:0;}
+.task-name-form {display:grid;gap:.375rem;margin-top:.5rem;padding-top:.75rem;border-top:1px solid var(--line);}
+.task-name-form label {font-size:.8125rem;font-weight:600;}
+.task-name-form input,.task-name-form select {width:100%;min-width:0;}
+.task-name-form p {margin:0;}
+.task-name-actions {display:flex;justify-content:flex-end;gap:.5rem;}

@@ -6,7 +6,7 @@ import { pageCardData } from "../lib/raw-sample.js";
 
   const readProfileIp = installProfileIpCapture(window);
 
-  const CHANNEL = "DOUYIN_AUTO_FINDER_PAGE";
+  const CHANNEL = "DOUYIN_AUTO_FINDER_PAGE_V2";
 
   function feedItems() {
     return [...document.querySelectorAll('[data-e2e="feed-item"]')]

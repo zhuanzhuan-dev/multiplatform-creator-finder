@@ -78,7 +78,7 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
       <div className="run-summary">
         <RadarDisplay state={state} />
         <div className={`run-fact run-time ${state.status || "idle"}`}><strong>{runningTime(state, now)}</strong><span>{active ? "本轮运行时长" : "本轮已运行"}</span></div>
-        <div className="run-fact"><strong>{state.route?.label || (tabModeLabels[state.backgroundMode || ""] ? "抖音推荐" : "—")}</strong><span>当前来源</span></div>
+        <div className="run-fact"><strong>{state.route?.label || (tabModeLabels[state.backgroundMode || ""] ? "抖音推荐" : "—")}</strong><span title={state.taskName}>{state.taskName || "默认任务"}</span></div>
         <div className="run-fact"><strong>{targetProgress(state)}</strong><span>任务目标</span></div>
       </div>
       <div className="actions">
@@ -95,6 +95,7 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
             {([['like', '点赞'], ['collect', '收藏'], ['follow', '关注']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{state.engagement?.policy[key] ? `${state.engagement.sent[key] || 0} 次按键已发送 · 配额已用 ${state.engagement.used[key] || 0} / ${Math.floor(state.engagement.videos * state.engagement.policy.rate / 100)}` : "未启用"}</dd></div>)}
             {state.engagement.lastResult ? <div><dt>最近互动</dt><dd>{state.engagement.lastResult}</dd></div> : null}
           </> : null}
+          {state.ipCapture?<div><dt>IP 属地</dt><dd>已接收 {state.ipCapture.responses} 份资料，取得 {state.ipCapture.captured} 份属地{state.ipCapture.error?` · ${errorMessage(state.ipCapture.error)}`:''}</dd></div>:null}
           <div><dt>同步方式</dt><dd>后台独立同步，暂停找号后继续处理队列</dd></div>
           <div><dt>待同步记录</dt><dd>{outboxCount} 条</dd></div>
           <div><dt>本轮已同步</dt><dd>{state.stats?.uploaded || 0} 条</dd></div>
@@ -145,7 +146,7 @@ export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates
                     <span className={`decision-label ${meta.tone}`}>{meta.label}</span>
                     <AccountVideosControl decision={decision} now={now} />
                   </div>
-                  <div className="decision-reason decision-meta"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)}</span><DecisionIpLocation decision={decision} /></div>
+                  <div className="decision-reason decision-meta"><span className="decision-source">{sourcePlatformLabel(decision.sourcePlatform)} · {decision.taskName || "默认任务"}</span><DecisionIpLocation decision={decision} /></div>
                   {decision.code === 'XINGTU_OBSERVED' ? <div className="decision-reason">{xingtuHistoryDetailsReady ? '本地观察中没有对应达人指标' : '扩展后台待重新加载，达人指标暂未显示'}</div> : <DecisionRuleMatch decision={decision} />}
                 </div>
                 <time className="decision-time" dateTime={decision.occurredAt || ""}>{formatRelativeTime(decision.occurredAt, now)}</time>

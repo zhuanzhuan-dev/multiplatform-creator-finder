@@ -10,6 +10,10 @@ const outputDirectory = resolve(root, "dist");
 function extensionRuntime(): Plugin {
   const watchedFiles = [
     "background.js",
+    "lib/douyin-task.js",
+    "lib/douyin-profile-network.js",
+    "lib/task-instances.js",
+    "lib/instance-runtime.js",
     "lib/huxuan-api.js", "lib/huxuan-collection.js", "lib/huxuan-task.js", "content/huxuan-content.js", "page/huxuan-page-bridge.js",
     "manifest.json",
     "workbench-bridge.js",
@@ -20,6 +24,7 @@ function extensionRuntime(): Plugin {
     "lib/feigua-request.js",
     "page/xingtu-page-bridge.js",
     "content/douyin-content.js",
+    "content/raw-capture.js",
     "content/feigua-content.js",
     "content/kuaishou-content.js",
     "lib/kuaishou-page.js",

@@ -11,9 +11,9 @@ export async function captureCurrentRaw(observation) {
   const structured=await new Promise(resolve=>{
     let timer;
     const finish=value=>{clearTimeout(timer);window.removeEventListener('message',listener);resolve(value);};
-    const listener=event=>{if(event.source===window&&event.data?.channel==='DOUYIN_AUTO_FINDER_PAGE'&&event.data?.direction==='response'&&event.data?.id===id)finish(event.data.result);};
+    const listener=event=>{if(event.source===window&&event.data?.channel==='DOUYIN_AUTO_FINDER_PAGE_V2'&&event.data?.direction==='response'&&event.data?.id===id)finish(event.data.result);};
     window.addEventListener('message',listener);timer=setTimeout(()=>finish({candidates:[],reason:'page data timed out'}),1000);
-    window.postMessage({channel:'DOUYIN_AUTO_FINDER_PAGE',direction:'request',id,command:'GET_FEED_RAW',payload:{videoId:observation?.videoId||''}},'*');
+    window.postMessage({channel:'DOUYIN_AUTO_FINDER_PAGE_V2',direction:'request',id,command:'GET_FEED_RAW',payload:{videoId:observation?.videoId||''}},'*');
   });
   const current=parser.parseCurrentFeed(document);
   if (parser.visibleFeedItem(document)!==card || current?.videoId!==observation?.videoId) throw Error('页面已切换，本次采样已取消');

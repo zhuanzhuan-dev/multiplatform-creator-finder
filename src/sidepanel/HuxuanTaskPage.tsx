@@ -16,10 +16,10 @@ export function HuxuanTaskPage({extension,draft,now}:{extension:ReturnType<typeo
   useEffect(()=>{setPages(String(maxPages));setMin(String(minSeconds));setMax(String(maxSeconds));},[maxPages,minSeconds,maxSeconds]);
   const save=async()=>{
     setSaving(true);setNotice('');
-    try {await sendRuntime({type:'DRA_SAVE_HUXUAN_CONFIG',maxPages:Number(pages),minSeconds:Number(min),maxSeconds:Number(max)});await extension.refresh();setNotice('已保存，下轮采集生效');}
+    try {await sendRuntime({type:'DRA_SAVE_HUXUAN_CONFIG',platform:snapshot.configPlatform,maxPages:Number(pages),minSeconds:Number(min),maxSeconds:Number(max)});await extension.refresh();setNotice('已保存，下轮采集生效');}
     catch(error){setNotice(errorMessage(error));}finally{setSaving(false);}
   };
-  const open=async()=>{try{const current=await chrome.windows.getCurrent();await sendRuntime({type:'DRA_OPEN_HUXUAN',windowId:current.id});}catch(error){setNotice(errorMessage(error));}};
+  const open=async()=>{try{const current=await chrome.windows.getCurrent();await sendRuntime({type:'DRA_OPEN_HUXUAN',platform:snapshot.configPlatform,windowId:current.id});}catch(error){setNotice(errorMessage(error));}};
   return <>
     <section className="feigua-task-card" aria-labelledby="huxuanTaskTitle">
       <div className="feigua-task-heading"><h2 id="huxuanTaskTitle">腾讯互选视频号采集</h2><span className="badge">{snapshot.cloud?.connected?'自动上传':'等待连接'}</span></div>

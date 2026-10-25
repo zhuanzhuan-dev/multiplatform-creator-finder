@@ -20,13 +20,15 @@ export interface Stats {
 }
 
 export interface Decision {
+  taskId?: string;
+  taskName?: string;
   sourcePlatform?: string;
   id?: string;
   runId?: string;
   runStartedAt?: string;
   code?: string;
   reasons?: string[];
-  ruleMatch?: {taskName: string; ruleName: string; matchedItems: string[]} | null;
+  ruleMatch?: {taskId?: string; taskName: string; ruleName: string; matchedItems: string[]} | null;
   accountName?: string;
   ipLocation?: string | null;
   ipLocationStatus?: string | null;
@@ -52,6 +54,9 @@ export interface Decision {
 }
 
 export interface RunState {
+  ipCapture?: {responses:number;captured:number;error?:string};
+  taskId?: string;
+  taskName?: string;
   runSettings?: Partial<Settings>;
   engagement?: { policy: { rate: number; like: boolean; collect: boolean; follow: boolean }; videos: number; used: Record<string, number>; sent: Record<string, number>; lastResult: string };
   runId?: string;

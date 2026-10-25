@@ -55,6 +55,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
   let preferences = launcherPreferences(), preferencesReady = false, visitHidden = visitHiddenInitially;
   let currentInfo = { visible: true, status: 'idle' };
   let renderedInfo = '';
+  let instanceStates = {};
   let taskStates = {douyin:{},kuaishou:{},bilibili:{},bilibiliPopular:{},feigua:{},xingtu:{},huxuan:{}};
   function withLauncherRoute(key, task) {
     const platform = key === 'bilibiliPopular' ? 'bilibili' : (task.route?.platform || key);
@@ -102,7 +103,7 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
       }
       row.dataset.state=task.status;
       row.children[0].textContent=`${task.name} · ${task.label}`;
-      row.children[1].textContent=`${['feigua','xingtu','huxuan'].includes(task.platform)?'已采集':'已刷'} ${task.count} ${task.unit}`;
+      row.children[1].textContent=`${task.unit==='页'?'已采集':'已刷'} ${task.count} ${task.unit}`;
     }
     button.title=summary;
     hint.style.top='0px';
@@ -169,13 +170,14 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
   });
   chrome.storage.onChanged.addListener((changes,area) => {
     if(area!=='local')return;
-    if (!['draState','draFeiguaState','draXingtuState','draHuxuanState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey].some(key => changes[key])) return;
+    if (!['draTaskInstanceProgress','draState','draFeiguaState','draXingtuState','draHuxuanState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey].some(key => changes[key])) return;
     if(changes[LAUNCHER_ENABLED_KEY]) preferences.enabled = changes[LAUNCHER_ENABLED_KEY].newValue !== false;
     if(changes[LAUNCHER_COMPACT_KEY]) preferences.compact = changes[LAUNCHER_COMPACT_KEY].newValue === true;
     if(changes[siteKey]) preferences.siteBlocked = changes[siteKey].newValue === true;
     if (changes[LAUNCHER_ENABLED_KEY] || changes[LAUNCHER_COMPACT_KEY] || changes[siteKey]) visibility();
     if (changes[LAUNCHER_COMPACT_KEY]) position();
     if(changes.draTheme){theme=changes.draTheme.newValue||'system';appearance();}
+    if(changes.draTaskInstanceProgress)instanceStates=changes.draTaskInstanceProgress.newValue || {};
     if(changes.draState) taskStates.douyin=changes.draState.newValue || {};
     if(changes.draFeiguaState) taskStates.feigua=changes.draFeiguaState.newValue || {};
     if(changes.draHuxuanState)taskStates.huxuan=changes.draHuxuanState.newValue || {};
@@ -183,10 +185,10 @@ import { normalizeLauncherPosition, launcherCoordinates, launcherPositionFromPoi
     if(changes.draKuaishou) taskStates.kuaishou=changes.draKuaishou.newValue?.state || {};
     if(changes.draBilibiliState) taskStates.bilibili=changes.draBilibiliState.newValue || {};
     if(changes.draBilibiliPopularState) taskStates.bilibiliPopular=changes.draBilibiliPopularState.newValue || {};
-    if(changes.draState || changes.draFeiguaState || changes.draXingtuState || changes.draKuaishou || changes.draBilibiliState || changes.draBilibiliPopularState) render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)))));
+    if(changes.draTaskInstanceProgress || changes.draHuxuanState || changes.draState || changes.draFeiguaState || changes.draXingtuState || changes.draKuaishou || changes.draBilibiliState || changes.draBilibiliPopularState) render(launcherState(aggregateTaskState([...Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)),...Object.values(instanceStates)])));
     if(changes.draLauncherPosition && !drag){savedPosition=normalizeLauncherPosition(changes.draLauncherPosition.newValue);position();}
   });
-  chrome.storage.local.get(['draState','draFeiguaState','draXingtuState','draHuxuanState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey]).then(saved=>{taskStates={douyin:{...saved.draState,route:{platform:"douyin"}},kuaishou:{...saved.draKuaishou?.state,route:{platform:"kuaishou"}},bilibili:{...saved.draBilibiliState,route:saved.draBilibiliState?.route || {platform:"bilibili",surface:"recommend"}},bilibiliPopular:{...saved.draBilibiliPopularState,route:saved.draBilibiliPopularState?.route || {platform:"bilibili",surface:"popular"}},feigua:{...saved.draFeiguaState,route:{platform:"feigua"}},xingtu:{...saved.draXingtuState,route:{platform:"xingtu"}},huxuan:{...saved.draHuxuanState,route:{platform:"huxuan"}}};render(launcherState(aggregateTaskState(Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)))));preferences=launcherPreferences(saved,location.hostname);preferencesReady=true;visibility();theme=saved.draTheme||'system';savedPosition=normalizeLauncherPosition(saved.draLauncherPosition);appearance();position();}).catch(()=>host.remove());
+  chrome.storage.local.get(['draTaskInstanceProgress','draState','draFeiguaState','draXingtuState','draHuxuanState','draKuaishou','draBilibiliState','draBilibiliPopularState','draTheme','draLauncherPosition',LAUNCHER_ENABLED_KEY,LAUNCHER_COMPACT_KEY,siteKey]).then(saved=>{instanceStates=saved.draTaskInstanceProgress || {};taskStates={douyin:{...saved.draState,route:{platform:"douyin"}},kuaishou:{...saved.draKuaishou?.state,route:{platform:"kuaishou"}},bilibili:{...saved.draBilibiliState,route:saved.draBilibiliState?.route || {platform:"bilibili",surface:"recommend"}},bilibiliPopular:{...saved.draBilibiliPopularState,route:saved.draBilibiliPopularState?.route || {platform:"bilibili",surface:"popular"}},feigua:{...saved.draFeiguaState,route:{platform:"feigua"}},xingtu:{...saved.draXingtuState,route:{platform:"xingtu"}},huxuan:{...saved.draHuxuanState,route:{platform:"huxuan"}}};render(launcherState(aggregateTaskState([...Object.entries(taskStates).map(([key,task])=>withLauncherRoute(key,task)),...Object.values(instanceStates)])));preferences=launcherPreferences(saved,location.hostname);preferencesReady=true;visibility();theme=saved.draTheme||'system';savedPosition=normalizeLauncherPosition(saved.draLauncherPosition);appearance();position();}).catch(()=>host.remove());
   system.addEventListener('change',appearance);addEventListener('resize',position);
   void refresh();
 })();
