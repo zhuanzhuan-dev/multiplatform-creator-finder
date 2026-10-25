@@ -44,6 +44,7 @@ time { color: var(--quiet); white-space: nowrap; }
 .creator-copy { min-width: 0; display: grid; gap: 2px; }
 .creator strong, .creator small { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .creator small { color: var(--muted); font-size: 11px; }
+.creator-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; color:var(--muted); font-size:11px; }
 .video-cell { min-width: 220px; max-width: 360px; vertical-align: top; }
 .video-summary { display: grid; gap: 4px; margin-bottom: 8px; }
 .video-summary strong { font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }

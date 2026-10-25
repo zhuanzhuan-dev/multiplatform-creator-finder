@@ -269,15 +269,23 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
       return { ok: true };
     }
 
+    async function capturedProfileIp(profile, observation) {
+      const secUid = profile?.secUid || observation.secUid;
+      const profileUrl = profile?.profileUrl || observation.profileUrl;
+      if (!secUid || !profileUrl) return null;
+      const result = await pageCommand("GET_PROFILE_IP", { secUid }, 3_000);
+      const ip = result?.ipLocation;
+      return ip?.secUid === secUid && ip.ipLocationProfileUrl === profileUrl
+        && ["available", "missing"].includes(ip.ipLocationStatus) ? ip : null;
+    }
+
     async function collectProfileIp(profile, observation) {
       const secUid = profile.secUid || observation.secUid;
       const profileUrl = profile.profileUrl || observation.profileUrl;
       const deadline = Date.now() + 2_000;
       do {
-        const result = await pageCommand("GET_PROFILE_IP", { secUid }, 3_000);
-        const ip = result?.ipLocation;
-        if (ip?.secUid === secUid && ip.ipLocationProfileUrl === profileUrl
-          && ["available", "missing"].includes(ip.ipLocationStatus)) return ip;
+        const ip = await capturedProfileIp(profile, observation);
+        if (ip) return ip;
         if (Date.now() >= deadline) break;
         await sleep(250);
       } while (running);
@@ -551,6 +559,12 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
           };
         }
 
+        // Reuse responses that arrived during viewing, including for quickly rejected cards.
+        // This only reads the existing page cache; it never requests a profile or opens a page.
+        if (profile?.ipLocationStatus !== 'available') {
+          const ip = await capturedProfileIp(profile, observation);
+          if (ip) profile = { ...profile, ...ip };
+        }
         const dwellSeconds = Number(((Date.now() - tickStartedAt) / 1000).toFixed(1));
         await progress("submit", { actualDwellSeconds: dwellSeconds });
         const submissionState = recommendationState(document, parser);

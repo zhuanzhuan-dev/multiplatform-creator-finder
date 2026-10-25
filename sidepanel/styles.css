@@ -341,6 +341,9 @@ button.icon-button { display: grid; place-items: center; width: 2.75rem; height:
 .raw-capture-settings .field-note { margin:0; }
 .raw-capture-settings select { max-width:100%; min-width:0; }
 .decision-source { color:var(--quiet); }
+.decision-meta { display:flex; align-items:baseline; flex-wrap:wrap; gap:.375rem; }
+.decision-meta .decision-ip-location::before { content:"·"; margin-inline-end:.375rem; }
+.decision-ip-location { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 .configuration-panel > summary { gap: .5rem; }
 .configuration-panel > summary .summary-copy { margin-left: auto; }

@@ -137,6 +137,18 @@ const browserMock = `<script>
     snapshot.decisionHistory = ${JSON.stringify(ruleMatchPreview)};
     snapshot.decisionHistoryTotal = snapshot.decisionHistory.length;
   }
+  if (new URLSearchParams(location.search).has('ip-location')) {
+    for (const task of snapshot.tasks) task.status = 'paused';
+    const example = ${JSON.stringify(ruleMatchPreview[0])};
+    snapshot.decisionHistory = [
+      {...example,id:'ip-available',accountName:'已采到属地的示例达人',ipLocation:'北京',ipLocationStatus:'available',ipLocationCapturedAt:new Date(now).toISOString()},
+      {...example,id:'ip-uncaptured',accountName:'未取得响应的示例达人'},
+      {...example,id:'ip-missing',accountName:'平台未提供属地的示例达人',ipLocationStatus:'missing'},
+      {...example,id:'ip-failed',accountName:'读取失败的示例达人',ipLocationStatus:'failed'},
+      {...example,id:'ip-other-platform',accountName:'快手示例达人',sourcePlatform:'kuaishou',ruleMatch:null},
+    ];
+    snapshot.decisionHistoryTotal = snapshot.decisionHistory.length;
+  }
   const storageListeners = new Set();
   const previewStorageKey = "draPreviewStorage";
   const readStored = () => JSON.parse(localStorage.getItem(previewStorageKey) || "{}");
