@@ -28,7 +28,8 @@ import { dailySnapshot, recordDailyScan } from "./lib/daily-stats.js";
 import { loadOutbox, writeOutboxChanges } from "./lib/outbox-store.js";
 import { CLOUD_DESTINATION, MAX_INGEST_BYTES, MAX_INGEST_RECORDS, buildIngestBody, buildObservationRecord, classifyIngestStatus, createCloudClient, encodeIngestBody, ingestResultSets, pairUrlFor, shrinkRecordsToByteLimit } from "./lib/cloud.js";
 import { DEFAULT_RULES, DEFAULT_SETTINGS, INITIAL_STATE, STORAGE_KEYS, TEAM_DESTINATION, mergeRules, mergeSettings, mergeXingtuRules, mergeXingtuSettings, scheduleFrom, validateSettings } from "./lib/defaults.js";
-import { migrateDecisionHistory, writeDecisions, cleanupDecisions, decisionPreview, queryDecisions } from "./lib/decision-store.js";
+import { migrateDecisionHistory, writeDecisions, cleanupDecisions, decisionPreview, queryDecisions, pendingFunnelScans, removeFunnelScans } from "./lib/decision-store.js";
+import { funnelScan } from "./lib/funnel-scans.js";
 import { normalizeSourcePlatform } from "./lib/source-platform.js";
 
 import { validateRules } from "./lib/rule-engine.js";
@@ -517,6 +518,7 @@ async function initialize() {
     delete state.recentDecisions;
     await chrome.storage.local.remove(STORAGE_KEYS.decisionHistory);
     await chrome.alarms.create("dra-history-cleanup", {periodInMinutes:5});
+    await chrome.alarms.create("dra-funnel-upload", {periodInMinutes:1});
     if (state.status === "starting") {
       state.status = "paused";
       state.startupStage = "";
@@ -746,8 +748,11 @@ function recordDecision(decision = {}, observation = {}, profile = null, owner =
     shares: num(observation.shares),
     occurredAt: new Date().toISOString()
   };
-  owner.lastDecision = entry;
+  entry.funnelScan = funnelScan(decision, observation, profile, owner, cloudAuth?.user_id, pluginVersion(), entry.id, entry.occurredAt);
+  entry.funnelOnly = decision.funnelOnly === true;
+  if (!entry.funnelOnly) owner.lastDecision = entry;
   pendingDecisions.push(entry);
+  if (entry.funnelOnly) void flushDecisionHistory().catch(error=>console.error('funnel scan history write failed', error));
   return entry;
 }
 
@@ -1425,6 +1430,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "dra-history-cleanup") {
     initialize().then(()=>cleanupDecisions()).then(()=>chrome.runtime.sendMessage({type:"DRA_HISTORY_CHANGED"})).catch(()=>undefined);
   }
+  if (alarm.name === "dra-funnel-upload") initialize().then(async()=>{
+    if (!cloudReady() || !cloudAuth.user_id) return;
+    const auth = cloudAuth;
+    for (let batch = 0; batch < 10 && cloudAuth === auth; batch++) {
+      const scans = await pendingFunnelScans(auth.user_id);
+      if (!scans.length) return;
+      const result = await cloudClient.uploadFunnelScans(auth.device_token, scans);
+      if (!result.ok || cloudAuth !== auth) return;
+      await removeFunnelScans(scans.map(scan=>scan.id));
+    }
+  }).catch(error=>console.error('funnel scan upload failed', error));
   if ([KUAISHOU_ALARM,KUAISHOU_STOP_ALARM].includes(alarm.name)) initialize().then(()=>kuaishou.inspect()).catch(error=>kuaishou.pause(error.message));
   if ([BILIBILI_ALARM,BILIBILI_STOP_ALARM].includes(alarm.name)) initialize().then(()=>bilibili.inspect()).catch(error=>bilibili.pause(error.message));
   if ([BILIBILI_POPULAR_ALARM,BILIBILI_POPULAR_STOP_ALARM].includes(alarm.name)) initialize().then(()=>bilibiliPopular.inspect()).catch(error=>bilibiliPopular.pause(error.message));
