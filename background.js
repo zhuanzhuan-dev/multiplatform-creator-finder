@@ -143,6 +143,11 @@ async function prepareFeedbackRules(platform) {
 
 
 const profileNetwork=createProfileNetworkCapture(chrome.debugger);
+function judgeFootage(body) {
+  const token = cloudAuth?.device_token;
+  if (!token || cloudAuth?.expired) return Promise.resolve({ ok: false, status: 401, payload: { error: "invalid_session" } });
+  return cloudClient.judgeFootage(token, body);
+}
 const douyin = createDouyinRuntime({
  config:()=>({settings,rules}),identity:()=>({taskId:'douyin',taskName:'默认任务'}),
  changed:value=>{state=value.state;seenVideos=value.seenVideos;creatorIndex=value.creatorIndex;},
@@ -153,7 +158,7 @@ const douyin = createDouyinRuntime({
  saveSettings:async next=>{settings=next;await chrome.storage.local.set({[STORAGE_KEYS.settings]:settings});},
  selectPage:tabId=>chrome.tabs.get(tabId),ownedElsewhere:tabId=>ownedElsewhere(tabId,'douyin'),
  waitForTabComplete,ensureContentRuntime,sendTabMessage,saveRawSample,readDouyinIpLocation,
- captureProfileIp:profileNetwork.enable,releaseProfileIp:profileNetwork.detach,readCapturedProfileIp:profileNetwork.read
+ captureProfileIp:profileNetwork.enable,releaseProfileIp:profileNetwork.detach,readCapturedProfileIp:profileNetwork.read,judgeFootage
 });
 function observationRecord(...args){return douyin.observationRecord(...args);}
 function setPaused(...args){return douyin.setPaused(...args);}
@@ -273,7 +278,7 @@ const instances=createTaskInstances({config:configurationFor,persist:persistWork
  ensureContent:ensureContentRuntime,waitForTab:waitForTabComplete,waitForTabComplete,ensureContentRuntime,sendTabMessage,
  recordDecision,addOutbox,touchOutbox,reserveQueue,saveObservations,saveRawSample,readDouyinIpLocation,
  captureProfileIp:profileNetwork.enable,releaseProfileIp:profileNetwork.detach,readCapturedProfileIp:profileNetwork.read,
- collectKuaishou,collectBilibili,outbox:()=>outbox,cloudAuth:()=>cloudAuth,
+ collectKuaishou,collectBilibili,outbox:()=>outbox,cloudAuth:()=>cloudAuth,judgeFootage,
  recordScan:key=>{dailyStats=recordDailyScan(dailyStats,key);},ownedElsewhere,
  selectPage:async(entry,tabId)=>{
    const previous=entry.runtime.state();

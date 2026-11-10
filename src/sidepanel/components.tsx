@@ -11,6 +11,7 @@ import { NumberInput, inputNumber } from "../shared/NumberInput";
 import { decisionMeta, formatDuration, formatLocalDateTime, formatRelativeTime } from "./format";
 import { RadarDisplay } from "./RadarDisplay";
 import type { CategoryRule, Decision, CloudState, RuleSettings, RunState, SettingsDraft, Snapshot, Stats } from "./types";
+import { aiGeneratedStatusText } from "../../lib/ai-generated.js";
 import { AccountVideosControl } from "../shared/AccountVideosControl";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -197,8 +198,9 @@ function stat(stats: Stats, key: keyof Stats): number {
   return Number(stats[key] || 0);
 }
 
-export function StatsOverview({ state, now, daily, history, historyTotal }: { state: RunState; now: number; daily?: Snapshot["daily"]; history?: Decision[]; historyTotal?: number }) {
+export function StatsOverview({ state, now, daily, history, historyTotal, showAiGenerated = false }: { state: RunState; now: number; daily?: Snapshot["daily"]; history?: Decision[]; historyTotal?: number; showAiGenerated?: boolean }) {
   const stats = state.stats || {};
+  const aiGeneratedText = aiGeneratedStatusText(state.aiGenerated);
   return (
     <section className="stats-section" aria-labelledby="statsTitle">
       <div className="section-heading"><h2 id="statsTitle">{state.status === "stopped" ? "本轮已结束" : "本轮结果"}</h2><span className="section-meta" title="按北京时间统计，当天同一内容只计一次；保存在当前浏览器">今日已刷 <strong>{daily?.date === new Date(now + 8 * 3600000).toISOString().slice(0, 10) ? daily.scanned : 0}</strong></span></div>
@@ -209,12 +211,13 @@ export function StatsOverview({ state, now, daily, history, historyTotal }: { st
       </dl>
       <details className="stats-details">
         <summary>
-          <span className="stats-throughput"><span>本轮已刷 <strong>{stat(stats, "scanned")}</strong></span></span>
+          <span className="stats-throughput"><span>本轮已刷 <strong>{stat(stats, "scanned")}</strong></span>{showAiGenerated ? <span>AI生成 <strong>{aiGeneratedText}</strong></span> : null}</span>
           <span className="stats-detail-action"><span className="when-closed">过程明细</span><span className="when-open">收起明细</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></span>
         </summary>
         <dl className="stats-breakdown">
           <div><dt>重复发现</dt><dd>{stat(stats, "duplicates")}</dd></div>
           <div><dt>已标记不感兴趣</dt><dd>{stat(stats, "notInterested")}</dd></div>
+          {showAiGenerated ? <div><dt>AI生成</dt><dd>{aiGeneratedText}</dd></div> : null}
           <div><dt>跳过直播</dt><dd>{stat(stats, "liveSkipped")}</dd></div>
           <div><dt>跳过图文</dt><dd>{stat(stats, "photoSkipped")}</dd></div>
           <div><dt>跳过广告</dt><dd>{stat(stats, "adSkipped")}</dd></div>
@@ -354,6 +357,19 @@ export function SettingsPanel({ draft, disabled, onChange, onSave, saveStatus, r
           <button className="preset-button" disabled={disabled} onClick={() => onChange({ ...draft, dwellMode: "range", dwellMinSeconds: 10, dwellTypicalSeconds: 20, dwellMaxSeconds: 30 })}>应用随机预设</button>
           <p className="field-note">随机区间采用截断正态分布，在上下限之间连续取值，多数接近中心。默认 10–30 秒、中心 20 秒；随机节奏无法保证避免平台风控。</p>
         </section>}
+
+        {recommendationPlatform === "douyin" ? <section className="setting-group" aria-labelledby="aiGeneratedTitle">
+          <div className="setting-heading"><strong id="aiGeneratedTitle">AI 生成</strong><span>命中播放器上的官方声明时</span></div>
+          <div className="form-grid">
+            <label>处理方式<select aria-label="AI生成处理方式" value={draft.aiGeneratedAction} disabled={disabled} onChange={(event) => onChange({ ...draft, aiGeneratedAction: event.target.value as SettingsDraft["aiGeneratedAction"] })}>
+              <option value="short-dwell">降低停留</option>
+              <option value="skip">快速刷过</option>
+              <option value="not-interested">不感兴趣</option>
+            </select></label>
+            {draft.aiGeneratedAction === "short-dwell" ? <label>停留上限（秒）<NumberInput min="1" max="300" value={draft.aiGeneratedDwellSeconds} disabled={disabled} onChange={number("aiGeneratedDwellSeconds")} /></label> : null}
+          </div>
+          <p className="field-note">只认「作者声明：内容由 AI 生成」这类官方声明，简介里的话题不算。默认把原本要停留的视频压到 5 秒内，不改淘汰结果。本轮这类视频占已刷卡片的比例一旦超过一半，当前这条和后面的 AI 视频都会点不感兴趣。</p>
+        </section> : null}
 
         {recommendationPlatform==='bilibili' ? <section className="setting-group" aria-labelledby="bilibiliBatchTitle">
           <div className="setting-heading"><strong id="bilibiliBatchTitle">批间间隔</strong><span>一次拉一整页（热门约 20 / 推荐约 30），页内连续处理；仅在请求下一批前等待</span></div>

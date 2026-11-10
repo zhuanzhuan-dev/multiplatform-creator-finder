@@ -4,6 +4,7 @@ import { contentSkipDecision } from "../lib/content-type.js";
 import { evaluateVideoRules, evaluateCreatorRules } from "../lib/rule-engine.js";
 import { sampleDwellSeconds } from "../lib/dwell.js";
 import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
+import { captureFeedFrame, pickFeedVideo, readDouyinAiHint } from "../lib/footage-frame.js";
 
 (function installDouyinAutomation() {
   "use strict";
@@ -55,6 +56,8 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
     let panelRecoveryAttempts = 3;
     let failureStreak = 0;
     let currentRecommendation = null;
+    let footageSerial = 0;
+    const sampledFootage = new Set();
 
     function assertRunning() {
       if (abort.signal.aborted || !running) throw new Error("循环已取消");
@@ -76,6 +79,46 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
 
     function scheduleTick(ms) {
       void sleep(ms).then(tick).catch(() => { running = false; });
+    }
+
+    async function askAiGenerated(recommendation, fingerprint) {
+      if (!fingerprint || recommendation?.mode === "author") return null;
+      const scope = recommendation?.card?.querySelectorAll ? recommendation.card : document;
+      let hint = null;
+      try { hint = readDouyinAiHint(scope, pickFeedVideo(scope)); } catch { hint = null; }
+      const response = await sendRuntime({ type: "DRA_AI_GENERATED", videoId: fingerprint, aiHint: hint });
+      return response?.ok ? response : null;
+    }
+
+    function scheduleFootageSample(recommendation, fingerprint) {
+      if (!fingerprint || sampledFootage.has(fingerprint) || recommendation?.mode === "author") return;
+      sampledFootage.add(fingerprint);
+      const serial = ++footageSerial;
+      const scope = recommendation?.card?.querySelectorAll ? recommendation.card : document;
+      void collectFootageSample(scope, fingerprint, serial).catch(() => undefined);
+    }
+
+    async function collectFootageSample(scope, fingerprint, serial) {
+      const video = pickFeedVideo(scope);
+      const hint = readDouyinAiHint(scope, video);
+      if (hint) void sendRuntime({ type: "DRA_FOOTAGE_JUDGE", videoId: fingerprint, serial, aiHint: hint }).catch(() => undefined);
+      if (!video) return;
+      let frame = null;
+      try { frame = await captureFeedFrame(video); } catch { frame = null; }
+      if (!running) return;
+      if (!frame?.image) {
+        await sendRuntime({ type: "DRA_FOOTAGE_JUDGE", videoId: fingerprint, serial, aiHint: hint, captureError: "画面没有截下来" });
+        return;
+      }
+      await sendRuntime({
+        type: "DRA_FOOTAGE_JUDGE",
+        videoId: fingerprint,
+        serial,
+        aiHint: hint,
+        image: frame.image,
+        capturedAt: frame.capturedAt,
+        currentTime: frame.currentTime,
+      });
     }
 
     function sendRuntime(message) {
@@ -500,6 +543,8 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
           void captureCurrentRaw(observation).then(sample => sendRuntime({type:"DRA_RAW_SAMPLE",sample})).catch(() => undefined);
         }
         const previousFingerprint = observationFingerprint(observation);
+        scheduleFootageSample(currentRecommendation, previousFingerprint);
+        const aiPlan = await askAiGenerated(currentRecommendation, previousFingerprint);
         const resumedDwell = resume?.phase === "dwell" && resume.videoId === previousFingerprint ? resume : null;
         if (resumedDwell && Number.isFinite(resumedDwell.cycleStartedAt)) tickStartedAt = resumedDwell.cycleStartedAt;
         resume = null;
@@ -526,14 +571,21 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
         }
 
         // Only candidates that pass video and creator rules receive viewing time.
-        const shouldDwell = videoDecision.matched && evaluateCreatorRules(profile, rules).matched;
+        // An official AI label can cap that time, or skip it, without waiting for the picture model.
+        const passesRules = videoDecision.matched && evaluateCreatorRules(profile, rules).matched;
+        const aiAction = aiPlan?.hit ? aiPlan.action : "";
+        const shouldDwell = passesRules && aiAction !== "skip" && aiAction !== "not-interested";
         if (shouldDwell) {
           const ip = await collectProfileIp(profile, observation);
           if (ip) profile = { ...profile, ...ip };
         }
-        const targetDwellMs = shouldDwell ? (resumedDwell ? resumedDwell.plannedDwellSeconds * 1_000 : sampleDwellSeconds(dwellPolicy) * 1_000) : 0;
-        const waitUntil = shouldDwell && resumedDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
-        if (shouldDwell) await progress("dwell", { waitUntil, cycleStartedAt: tickStartedAt, plannedDwellSeconds: targetDwellMs / 1_000 });
+        const capSeconds = Number(aiPlan?.dwellSeconds);
+        const capDwell = aiAction === "short-dwell" && Number.isFinite(capSeconds) && capSeconds > 0;
+        let plannedSeconds = shouldDwell ? (resumedDwell ? Number(resumedDwell.plannedDwellSeconds) : sampleDwellSeconds(dwellPolicy)) : 0;
+        if (shouldDwell && capDwell) plannedSeconds = Math.min(plannedSeconds, capSeconds);
+        const targetDwellMs = plannedSeconds > 0 ? plannedSeconds * 1_000 : 0;
+        const waitUntil = shouldDwell && resumedDwell && !capDwell ? resumedDwell.waitUntil : tickStartedAt + targetDwellMs;
+        if (targetDwellMs > 0) await progress("dwell", { waitUntil, cycleStartedAt: tickStartedAt, plannedDwellSeconds: targetDwellMs / 1_000 });
         const remainingDwellMs = Math.max(0, waitUntil - Date.now());
         if (remainingDwellMs > 0) await sleep(remainingDwellMs);
         if (!running) return;
@@ -583,19 +635,24 @@ import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
           profile,
           panelRecovered
         });
-        if (!result?.continue) {
-          await reportTransition(result?.observationRecordId, { beforeUrl, afterUrl: location.href, transitionOk: false, scrollDelta: null });
+        const outcome = aiPlan?.hit && aiPlan.action === "not-interested"
+          ? { ...result, action: "not-interested", engagementActions: [] }
+          : aiPlan?.hit && aiPlan.action === "skip"
+            ? { ...result, action: "advance", engagementActions: [] }
+            : result;
+        if (!outcome?.continue) {
+          await reportTransition(outcome?.observationRecordId, { beforeUrl, afterUrl: location.href, transitionOk: false, scrollDelta: null });
           running = false;
           return;
         }
-        if (result.engagementActions?.length) {
-          for (const action of result.engagementActions) {
+        if (outcome.engagementActions?.length) {
+          for (const action of outcome.engagementActions) {
             assertRunning();
             await sendRuntime({ type: "DRA_ENGAGE", action, videoId: observation.videoId }).catch(() => undefined);
           }
         }
         assertRunning();
-        const changed = await performAndReportTransition(result.observationRecordId, result.action || "advance", previousFingerprint, beforeUrl);
+        const changed = await performAndReportTransition(outcome.observationRecordId, outcome.action || "advance", previousFingerprint, beforeUrl);
         if (changed.blockedReason) {
           await sendRuntime({ type: "DRA_PAGE_BLOCKED", reason: changed.blockedReason });
           running = false;

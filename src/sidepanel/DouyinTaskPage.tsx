@@ -5,6 +5,7 @@ import { AdvancedRulesPanel, RunOverview, SettingsPanel, StatsOverview } from '.
 import type { Dispatch, SetStateAction } from 'react';
 import type { SettingsDraft, RuleSettings } from './types';
 import type { useExtensionState } from './use-extension-state';
+import { footageStatusLine } from '../../lib/footage-frame.js';
 
 type Props = { ruleSyncStatus?: ReactNode;
   extension:ReturnType<typeof useExtensionState>; now:number;
@@ -19,6 +20,7 @@ export function DouyinTaskPage({ruleSyncStatus,extension,now,draft,setDraft,rule
   const bilibili=state.route?.platform==='bilibili' || ['bilibili','bilibili-popular'].includes(extension.selectedPlatform);
   const popular=state.route?.surface==='popular' || extension.selectedPlatform==='bilibili-popular';
   const feedOnly=kuaishou || bilibili;
+  const footageLine=feedOnly ? "" : footageStatusLine(state.footageJudge);
   return <>
       <RunOverview
         state={state}
@@ -34,8 +36,9 @@ export function DouyinTaskPage({ruleSyncStatus,extension,now,draft,setDraft,rule
         onPause={() => void extension.run("pause", draft)}
         onStop={() => void extension.run("stop", draft)}
       />
+      {footageLine ? <p className="field-note" aria-live="polite">{footageLine}</p> : null}
       {extension.notice.text ? <p className={`message ${extension.notice.error ? "error" : ""}`} aria-live="polite">{extension.notice.text}</p> : null}
-      <StatsOverview state={state} now={now} daily={snapshot.daily} history={snapshot.decisionHistory} historyTotal={snapshot.decisionHistoryTotal} />
+      <StatsOverview showAiGenerated={!feedOnly} state={state} now={now} daily={snapshot.daily} history={snapshot.decisionHistory} historyTotal={snapshot.decisionHistoryTotal} />
       <ConfigurationPanel runtime={
         <SettingsPanel recommendationPlatform={bilibili?"bilibili":kuaishou?"kuaishou":"douyin"} draft={draft} disabled={configurationLocked || Boolean(extension.busyAction)} saveStatus={extension.settingsNotice} onChange={(next) => { setDraft(next); void extension.saveSettings(next, true).catch(() => undefined); }} onSave={() => void extension.saveSettings(draft).catch(() => undefined)} />
       } rules={<>

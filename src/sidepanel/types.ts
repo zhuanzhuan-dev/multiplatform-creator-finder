@@ -87,6 +87,17 @@ export interface RunState {
     recoveryAttempts?: number;
   };
   route?: { platform?: string; surface?: string; label?: string } | null;
+  footageJudge?: {
+    videoId?: string;
+    serial?: number;
+    verdict?: string;
+    reason?: string;
+    aiMark?: boolean;
+    domAiHint?: string | null;
+    elapsedMs?: number | null;
+    modelMs?: number | null;
+  } | null;
+  aiGenerated?: { seen?: number; hits?: number; switched?: boolean };
   lastDecision?: Decision | null;
   stats?: Stats;
 }
@@ -132,6 +143,8 @@ export interface Settings {
   target?: RunTarget;
   keepSystemAwake?: boolean;
   markRejectedNotInterested?: boolean;
+  aiGeneratedAction?: "short-dwell" | "skip" | "not-interested";
+  aiGeneratedDwellSeconds?: number;
   allowProfileIpFallback?: boolean;
   dryRun?: boolean;
   cloud?: { enabled?: boolean };
@@ -194,6 +207,8 @@ export interface SettingsDraft {
   targetMaxItems: number | "";
   keepSystemAwake: boolean;
   markRejectedNotInterested: boolean;
+  aiGeneratedAction: "short-dwell" | "skip" | "not-interested";
+  aiGeneratedDwellSeconds: number | "";
   allowProfileIpFallback: boolean;
   dryRun: boolean;
   scheduleEnabled: boolean;
@@ -224,6 +239,8 @@ export function settingsDraft(settings: EditableNumbers<Settings> = {}): Setting
     targetMaxItems: settings.target?.maxItems ?? 100,
     keepSystemAwake: settings.keepSystemAwake !== false,
     markRejectedNotInterested: settings.markRejectedNotInterested !== false,
+    aiGeneratedAction: settings.aiGeneratedAction === "skip" || settings.aiGeneratedAction === "not-interested" ? settings.aiGeneratedAction : "short-dwell",
+    aiGeneratedDwellSeconds: settings.aiGeneratedDwellSeconds ?? 5,
     allowProfileIpFallback: settings.allowProfileIpFallback === true,
     dryRun: Boolean(settings.dryRun),
     scheduleEnabled: settings.schedule?.enabled !== false,
