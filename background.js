@@ -1100,7 +1100,7 @@ async function flushOutboxBatch({ force = false, limit = MAX_INGEST_RECORDS } = 
   }
   rows = shrinkRecordsToByteLimit(rows, encode);
   const body = encode(rows);
-  if (body.length > MAX_INGEST_BYTES) {
+  if (new TextEncoder().encode(body).length > MAX_INGEST_BYTES) {
     for (const item of rows) {
       item.status = "dead";
       item.error = "单条观察超过上传体积上限";
@@ -1535,13 +1535,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     await initialize();
     const entry=instances.forTab(sender.tab?.id);
-    if(entry && (DOUYIN_CONTENT_MESSAGES.includes(message?.type) || ['DRA_KUAISHOU_VIDEO','DRA_BILIBILI_VIDEO','DRA_FEIGUA_PAGE','DRA_FEIGUA_PAGE_TIMEOUT','DRA_FEIGUA_COMPLETE','DRA_XINGTU_PAGE','DRA_XINGTU_COMPLETE','DRA_HUXUAN_PAGE'].includes(message?.type)))return entry.runtime.message(message,sender);
+    if(entry && (DOUYIN_CONTENT_MESSAGES.includes(message?.type) || ['DRA_KUAISHOU_VIDEO','DRA_BILIBILI_VIDEO','DRA_FEIGUA_PAGE','DRA_FEIGUA_PAGE_TIMEOUT','DRA_FEIGUA_COMPLETE','DRA_XINGTU_PAGE','DRA_XINGTU_COMPLETE','DRA_HUXUAN_PAGE','DRA_HUXUAN_PART','DRA_HUXUAN_LIST'].includes(message?.type)))return entry.runtime.message(message,sender);
     if(['DRA_START','DRA_RESUME','DRA_PAUSE','DRA_STOP'].includes(message?.type))return controlTask(message);
     if (DOUYIN_CONTENT_MESSAGES.includes(message?.type) && sender.tab?.id===state.feedTabId) return douyin.message(message,sender);
     if (sender.tab?.id === kuaishou.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_KUAISHOU_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return kuaishou.message(message,sender);
     if (bilibiliForTab(sender.tab?.id) && ['DRA_WAIT','DRA_PROGRESS','DRA_BILIBILI_VIDEO','DRA_TICK_ERROR'].includes(message?.type)) return bilibiliForTab(sender.tab.id).message(message,sender);
     if (sender.tab?.id === feigua.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_FEIGUA_PAGE','DRA_FEIGUA_PAGE_TIMEOUT','DRA_FEIGUA_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return feigua.message(message,sender);
-    if (sender.tab?.id === huxuan.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_HUXUAN_PAGE','DRA_TICK_ERROR'].includes(message?.type)) return huxuan.message(message,sender);
+    if (sender.tab?.id === huxuan.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_HUXUAN_PAGE','DRA_HUXUAN_PART','DRA_HUXUAN_LIST','DRA_TICK_ERROR'].includes(message?.type)) return huxuan.message(message,sender);
     if (sender.tab?.id === xingtu.state().feedTabId && ['DRA_WAIT','DRA_PROGRESS','DRA_XINGTU_PAGE','DRA_XINGTU_COMPLETE','DRA_PAGE_BLOCKED','DRA_FEED_STALLED','DRA_TICK_ERROR'].includes(message?.type)) return xingtu.message(message,sender);
     if (DOUYIN_CONTENT_MESSAGES.includes(message?.type)) return douyin.message(message,sender);
     const configuredInstance=instances.get(message.platform);

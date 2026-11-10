@@ -1,4 +1,5 @@
 import { HUXUAN_CHANNEL as channel } from '../lib/huxuan-api.js';
+import { collectHuxuanProfiles } from '../lib/huxuan-capture.js';
 
 let loop = null;
 const pending = new Map();
@@ -34,17 +35,33 @@ async function run(owner) {
     let pageNumber = owner.nextPage || context.pageNumber;
     while (loop===owner) {
       await send('DRA_PROGRESS',{phase:'read'});
-      const result = await pageRequest('page',{pageNumber,queryKey:context.queryKey});
+      const result = owner.checkpoint?.page?.pageNumber===pageNumber ? {ok:true,page:owner.checkpoint.page} : await pageRequest('page',{pageNumber,queryKey:context.queryKey});
       if (loop!==owner) return;
       if (!result.ok) throw Error(result.error);
-      const saved = await send('DRA_HUXUAN_PAGE',{page:result.page});
-      if (loop!==owner || !saved?.continue) return;
-      pageNumber++;
+      const registered=await send('DRA_HUXUAN_LIST',{page:result.page});
+      owner.checkpoint=registered.checkpoint;
+      result.page=owner.checkpoint.page;
       const delay = owner.settings?.huxuanDelay || {minSeconds:4,maxSeconds:6};
-      const seconds = delay.minSeconds + Math.random()*(delay.maxSeconds-delay.minSeconds);
+      const wait = async () => {
+        const seconds = delay.minSeconds + Math.random()*(delay.maxSeconds-delay.minSeconds);
+        const waited = await send('DRA_WAIT',{until:Date.now()+seconds*1000});
+        if (!waited?.ok || loop!==owner) throw Error('互选采集已暂停');
+      };
+      const profileResult = await collectHuxuanProfiles({rows:result.page.rows,checkpoint:owner.checkpoint || {},active:()=>loop===owner,
+        request:(authorId,dataset,args)=>pageRequest('profile',{authorId,dataset,...args,queryKey:context.queryKey}),
+        save:async(row,capture,metadata)=>{
+          const saved=await send('DRA_HUXUAN_PART',{pageNumber,pageUrl:result.page.pageUrl,queryKey:context.queryKey,row,capture,...metadata});
+          return saved.summary;
+        },
+        progress:(authorName,dataset)=>send('DRA_PROGRESS',{phase:'read',authorName,dataset}),wait,
+      });
+      if (loop!==owner) return;
+      const saved = await send('DRA_HUXUAN_PAGE',{page:{...result.page,profileCollection:true}});
+      if (loop!==owner || !saved?.continue) return;
+      owner.checkpoint={authors:saved.authors,range:profileResult.range};
+      pageNumber++;
       await send('DRA_PROGRESS',{phase:'wait'});
-      const waited = await send('DRA_WAIT',{until:Date.now()+seconds*1000});
-      if (!waited?.ok) return;
+      await wait();
     }
   } catch (error) { if (loop===owner) await send('DRA_TICK_ERROR',{error:error.message}).catch(()=>{}); }
   finally { if (loop===owner) loop=null; }

@@ -1,4 +1,4 @@
-import { HUXUAN_CHANNEL as channel, HUXUAN_SEARCH_PATH, huxuanContext, huxuanQueryKey, projectHuxuanResponse } from '../lib/huxuan-api.js';
+import { HUXUAN_CHANNEL as channel, HUXUAN_SEARCH_PATH, huxuanContext, huxuanQueryKey, projectHuxuanResponse, huxuanProfileRequest, assertHuxuanSuccess, huxuanBusinessData } from '../lib/huxuan-api.js';
 
 (function install() {
   const originalFetch = window.fetch.bind(window);
@@ -39,23 +39,31 @@ import { HUXUAN_CHANNEL as channel, HUXUAN_SEARCH_PATH, huxuanContext, huxuanQue
   };
   window.addEventListener('message', async event => {
     if (event.source !== window || event.origin !== location.origin || event.data?.channel !== channel || event.data.direction !== 'request') return;
-    const {requestId, action, pageNumber, queryKey} = event.data;
+    const {requestId, action, pageNumber, queryKey, authorId, dataset, pageIndex, beginDate, endDate} = event.data;
     if (typeof requestId !== 'string') return;
     if (action === 'cancel') { controller?.abort(); return; }
     if (!huxuanContext(location.href) || !seed || huxuanContext(location.href).accountId !== seed.context.accountId) { reply(requestId, {ok:false,error:'请在互选视频号创作者广场完成一次搜索，再开始采集'}); return; }
     if (action === 'status') { reply(requestId, {ok:true,queryKey:seed.queryKey,pageNumber:seed.body.page.no}); return; }
-    if (action !== 'page' || !Number.isInteger(pageNumber) || pageNumber < 1 || queryKey !== seed.queryKey) { reply(requestId,{ok:false,error:'互选筛选条件或账号已变化，请结束本轮后重新开始'}); return; }
+    if (!['page','profile'].includes(action) || action === 'page' && (!Number.isInteger(pageNumber) || pageNumber < 1) || queryKey !== seed.queryKey) { reply(requestId,{ok:false,error:'互选筛选条件或账号已变化，请结束本轮后重新开始'}); return; }
     const current = seed;
     controller?.abort(); controller = new AbortController();
     const signal = controller.signal;
     const timer = setTimeout(() => controller?.signal === signal && controller.abort(), 25000);
     try {
-      const response = await originalFetch(HUXUAN_SEARCH_PATH, {method:'POST',credentials:'same-origin',headers:current.headers,body:JSON.stringify({...current.body,page:{...current.body.page,no:pageNumber}}),signal});
-      if (!response.ok) throw Error(`互选接口 HTTP ${response.status}`);
+      const spec = action === 'page' ? {path:HUXUAN_SEARCH_PATH,body:{...current.body,page:{...current.body.page,no:pageNumber}}} : huxuanProfileRequest(authorId,dataset,{pageIndex,beginDate,endDate});
+      const url = spec.path + (spec.params ? '?'+new URLSearchParams(spec.params) : '');
+      const response = await originalFetch(url, {method:spec.body?'POST':'GET',credentials:'same-origin',headers:current.headers,...(spec.body?{body:JSON.stringify(spec.body)}:{}),signal});
+      if (!response.ok) { const error=Error(`互选接口 HTTP ${response.status}`);error.unavailable=response.status===403;throw error; }
       const payload = await response.json();
       if (seed?.queryKey !== queryKey || !huxuanContext(location.href) || huxuanContext(location.href).accountId !== current.context.accountId) throw Error('互选筛选条件或账号已变化，请结束本轮后重新开始');
-      reply(requestId,{ok:true,page:{...projectHuxuanResponse(payload,{pageNumber,pageSize:current.body.page.size,...current.context}),queryKey}});
-    } catch (error) { reply(requestId,{ok:false,error:error.name === 'AbortError' ? '互选请求已取消或超时，请检查登录状态后继续' : error.message}); }
+      assertHuxuanSuccess(payload);
+      if (action === 'page') reply(requestId,{ok:true,page:{...projectHuxuanResponse(payload,{pageNumber,pageSize:current.body.page.size,...current.context}),queryKey}});
+      else {
+        if (dataset === 'detail' && payload.data?.item?.appid !== authorId) throw Error('互选详情响应与当前达人身份不一致');
+        if (dataset.startsWith('videos:') && (!Array.isArray(payload.data?.video_list) || !Number.isInteger(payload.data?.total_cnt) || payload.data.total_cnt < 0)) throw Error('互选作品响应缺少列表或总数');
+        reply(requestId,{ok:true,capture:{dataset,authorId,pageIndex:pageIndex??null,beginDate:beginDate??null,endDate:endDate??null,endpoint:spec.path,status:payload.data==null?'empty':'available',capturedAt:new Date().toISOString(),data:huxuanBusinessData(payload.data)}});
+      }
+    } catch (error) { reply(requestId,{ok:false,unavailable:action==='profile' && error.unavailable===true,error:error.name === 'AbortError' ? '互选请求已取消或超时，请检查登录状态后继续' : error.message}); }
     finally { clearTimeout(timer); }
   });
 })();
