@@ -4,7 +4,7 @@ import { contentSkipDecision } from "../lib/content-type.js";
 import { evaluateVideoRules, evaluateCreatorRules } from "../lib/rule-engine.js";
 import { sampleDwellSeconds } from "../lib/dwell.js";
 import { readDouyinIpLocation } from "../lib/douyin-ip-location.js";
-import { captureFeedFrame, pickFeedVideo, readDouyinAiHint } from "../lib/footage-frame.js";
+import { captureFeedFrame, pickFeedVideo, readDouyinAiHint, readDouyinFootageCaption } from "../lib/footage-frame.js";
 
 (function installDouyinAutomation() {
   "use strict";
@@ -101,13 +101,14 @@ import { captureFeedFrame, pickFeedVideo, readDouyinAiHint } from "../lib/footag
     async function collectFootageSample(scope, fingerprint, serial) {
       const video = pickFeedVideo(scope);
       const hint = readDouyinAiHint(scope, video);
-      if (hint) void sendRuntime({ type: "DRA_FOOTAGE_JUDGE", videoId: fingerprint, serial, aiHint: hint }).catch(() => undefined);
+      const caption = readDouyinFootageCaption(scope);
+      if (hint) void sendRuntime({ type: "DRA_FOOTAGE_JUDGE", videoId: fingerprint, serial, aiHint: hint, caption }).catch(() => undefined);
       if (!video) return;
       let frame = null;
       try { frame = await captureFeedFrame(video); } catch { frame = null; }
       if (!running) return;
       if (!frame?.image) {
-        await sendRuntime({ type: "DRA_FOOTAGE_JUDGE", videoId: fingerprint, serial, aiHint: hint, captureError: "画面没有截下来" });
+        await sendRuntime({ type: "DRA_FOOTAGE_JUDGE", videoId: fingerprint, serial, aiHint: hint, caption, captureError: "画面没有截下来" });
         return;
       }
       await sendRuntime({
@@ -115,6 +116,7 @@ import { captureFeedFrame, pickFeedVideo, readDouyinAiHint } from "../lib/footag
         videoId: fingerprint,
         serial,
         aiHint: hint,
+        caption,
         image: frame.image,
         capturedAt: frame.capturedAt,
         currentTime: frame.currentTime,
