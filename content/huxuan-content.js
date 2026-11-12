@@ -23,45 +23,56 @@ async function run(owner) {
     return result;
   };
   try {
-    let context;
-    for (let attempt=0;attempt<20 && loop===owner;attempt++) {
-      context = await pageRequest('status');
-      if (context.ok) break;
-      await send('DRA_WAIT',{until:Date.now()+500});
-    }
-    if (loop!==owner) return;
-    if (!context?.ok) throw Error(context?.error || '互选列表尚未加载');
-    if (owner.queryKey && owner.queryKey!==context.queryKey) throw Error('互选筛选条件或账号已变化，请结束本轮后重新开始');
-    let pageNumber = owner.nextPage || context.pageNumber;
+    let pageNumber = owner.nextPage;
     while (loop===owner) {
+      let context;
+      for (let attempt=0;attempt<20 && loop===owner;attempt++) {
+        context = await pageRequest('status');
+        if (context.ok) break;
+        await send('DRA_WAIT',{until:Date.now()+500});
+      }
+      if (loop!==owner) return;
+      if (!context?.ok) throw Error(context?.error || '互选列表尚未加载');
+      if (!pageNumber || owner.queryKey && owner.queryKey!==context.queryKey) pageNumber=context.pageNumber;
       await send('DRA_PROGRESS',{phase:'read'});
-      const result = owner.checkpoint?.page?.pageNumber===pageNumber ? {ok:true,page:owner.checkpoint.page} : await pageRequest('page',{pageNumber,queryKey:context.queryKey});
+      const result = owner.checkpoint?.page?.pageNumber===pageNumber && owner.checkpoint.page.queryKey===context.queryKey ? {ok:true,page:owner.checkpoint.page} : await pageRequest('page',{pageNumber,queryKey:context.queryKey});
       if (loop!==owner) return;
       if (!result.ok) throw Error(result.error);
+      pageNumber=result.page.pageNumber;
+      owner.queryKey=result.page.queryKey;
       const registered=await send('DRA_HUXUAN_LIST',{page:result.page});
       owner.checkpoint=registered.checkpoint;
       result.page=owner.checkpoint.page;
-      const delay = owner.settings?.huxuanDelay || {minSeconds:4,maxSeconds:6};
-      const wait = async () => {
-        const seconds = delay.minSeconds + Math.random()*(delay.maxSeconds-delay.minSeconds);
-        const waited = await send('DRA_WAIT',{until:Date.now()+seconds*1000});
-        if (!waited?.ok || loop!==owner) throw Error('互选采集已暂停');
+      const delay = owner.settings?.huxuanDelay || {minSeconds:2,maxSeconds:4};
+      const pageDelay = owner.settings?.huxuanPageDelay || delay;
+      const waitFor = async interval => {
+        const seconds = interval.minSeconds + Math.random()*(interval.maxSeconds-interval.minSeconds);
+        const until = Date.now()+seconds*1000;
+        // Chunk long configured waits so the watchdog and pause stay responsive.
+        while (Date.now()<until) {
+          if (loop!==owner) throw Error('互选采集已暂停');
+          const waited = await send('DRA_WAIT',{until:Math.min(until,Date.now()+20000)});
+          if (!waited?.ok || loop!==owner) throw Error('互选采集已暂停');
+        }
       };
-      const profileResult = await collectHuxuanProfiles({rows:result.page.rows,checkpoint:owner.checkpoint || {},active:()=>loop===owner,
-        request:(authorId,dataset,args)=>pageRequest('profile',{authorId,dataset,...args,queryKey:context.queryKey}),
+      const wait = () => waitFor(delay);
+      const waitPage = () => waitFor(pageDelay);
+      const profileResult = await collectHuxuanProfiles({rows:result.page.rows,checkpoint:owner.checkpoint || {},active:()=>loop===owner,videoMaxPages:owner.settings?.huxuanVideoMaxPages ?? 1,
+        request:(authorId,dataset,args)=>pageRequest('profile',{authorId,dataset,...args,queryKey:result.page.queryKey}),
         save:async(row,capture,metadata)=>{
-          const saved=await send('DRA_HUXUAN_PART',{pageNumber,pageUrl:result.page.pageUrl,queryKey:context.queryKey,row,capture,...metadata});
+          const saved=await send('DRA_HUXUAN_PART',{pageNumber,pageUrl:result.page.pageUrl,queryKey:result.page.queryKey,row,capture,...metadata});
           return saved.summary;
         },
-        progress:(authorName,dataset)=>send('DRA_PROGRESS',{phase:'read',authorName,dataset}),wait,
+        progress:(authorName,dataset,workProgress)=>send('DRA_PROGRESS',{phase:'read',authorName,dataset,...workProgress}),wait,waitPage,parallel:context.profileConcurrency===true,
       });
       if (loop!==owner) return;
-      const saved = await send('DRA_HUXUAN_PAGE',{page:{...result.page,profileCollection:true}});
+      const latest=await pageRequest('status');
+      const saved = await send('DRA_HUXUAN_PAGE',{page:{...result.page,last:result.page.last && latest.ok && latest.queryKey===result.page.queryKey,profileCollection:true}});
       if (loop!==owner || !saved?.continue) return;
       owner.checkpoint={authors:saved.authors,range:profileResult.range};
       pageNumber++;
       await send('DRA_PROGRESS',{phase:'wait'});
-      await wait();
+      await waitPage();
     }
   } catch (error) { if (loop===owner) await send('DRA_TICK_ERROR',{error:error.message}).catch(()=>{}); }
   finally { if (loop===owner) loop=null; }

@@ -183,7 +183,7 @@ export function useExtensionState() {
         show("正在按目标恢复本轮，保留已有计数与记录…");
         if (!catalog) await saveSettings(draft);
         const tab = await getPanelTab();
-        await sendRuntime({ type: "DRA_RESUME", windowId: tab.windowId, platform, runId: snapshot?.state?.runId });
+        await sendRuntime({ type: "DRA_RESUME", tabId: tab.id, windowId: tab.windowId, platform, runId: snapshot?.state?.runId });
       } else if (action === "pause") {
         await sendRuntime({ type: "DRA_PAUSE", tabId: snapshot?.state?.feedTabId, platform, runId: snapshot?.state?.runId });
       } else {

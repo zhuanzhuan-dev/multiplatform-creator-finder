@@ -112,25 +112,30 @@ export function RunOverview({ state, cloud, outboxCount, schedule, now, busyActi
 }
 
 type XingtuCandidate = NonNullable<Snapshot["xingtu"]>["candidates"][number];
+type HuxuanCandidate = NonNullable<Snapshot["huxuan"]>["candidates"][number];
 
-export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates, xingtuCandidateTotal = 0, xingtuFinalized = false, xingtuHistoryDetailsReady = false }: { now: number; history?: Decision[]; total?: number; xingtuCandidates?: XingtuCandidate[]; xingtuCandidateTotal?: number; xingtuFinalized?: boolean; xingtuHistoryDetailsReady?: boolean }) {
+export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates, xingtuCandidateTotal = 0, xingtuFinalized = false, xingtuHistoryDetailsReady = false, huxuanCandidates, huxuanCandidateTotal = 0, huxuanFinalized = false, taskName = '默认任务' }: { now: number; history?: Decision[]; total?: number; xingtuCandidates?: XingtuCandidate[]; xingtuCandidateTotal?: number; xingtuFinalized?: boolean; xingtuHistoryDetailsReady?: boolean; huxuanCandidates?: HuxuanCandidate[]; huxuanCandidateTotal?: number; huxuanFinalized?: boolean; taskName?: string }) {
   const candidates = (xingtuCandidates || []).filter(row => /^\d{1,30}$/.test(row.xingtuId || ''));
   const candidateIds = new Set(candidates.map(row => row.xingtuId));
-  const visibleDecisions = history.filter(decision => decision.sourcePlatform !== 'xingtu' || !candidateIds.has(decision.authorId || extractXingtuId(decision.profileUrl))).slice(0, COLLAPSED_DECISION_COUNT);
-  const entries = [
-    ...candidates.map(row => ({ key: `xingtu:${row.xingtuId}`, at: Date.parse(row.observedAt || '') || 0, candidate: row, decision: undefined as Decision | undefined })),
-    ...visibleDecisions.map((decision, index) => ({ key: decision.id || `${decision.occurredAt || 'decision'}-${index}`, at: Date.parse(decision.occurredAt || '') || 0, candidate: undefined as XingtuCandidate | undefined, decision })),
+  const huxuanRows = (huxuanCandidates || []).slice(-COLLAPSED_DECISION_COUNT).reverse();
+  const huxuanIds = new Set(huxuanRows.map(row => row.authorId));
+  const visibleDecisions = history.filter(decision => (decision.sourcePlatform !== 'xingtu' || !candidateIds.has(decision.authorId || extractXingtuId(decision.profileUrl))) && (decision.sourcePlatform !== 'huxuan' || !huxuanIds.has(decision.authorId || ''))).slice(0, COLLAPSED_DECISION_COUNT);
+  const entries: {key:string;at:number;candidate?:XingtuCandidate;huxuan?:HuxuanCandidate;decision?:Decision}[] = [
+    ...candidates.map(row => ({ key: `xingtu:${row.xingtuId}`, at: Date.parse(row.observedAt || '') || 0, candidate: row })),
+    ...huxuanRows.map(row => ({ key: `huxuan:${row.authorId}`, at: Date.parse(row.completedAt || row.observedAt || '') || 0, huxuan: row })),
+    ...visibleDecisions.map((decision, index) => ({ key: decision.id || `${decision.occurredAt || 'decision'}-${index}`, at: Date.parse(decision.occurredAt || '') || 0, decision })),
   ].sort((left, right) => right.at - left.at);
   const openLocalHistory = () => chrome.tabs.create({ url: chrome.runtime.getURL("decisions/index.html") });
   const openWorkbenchHistory = () => chrome.tabs.create({ url: recentHistoryUrl() });
   return (
     <section className="decision-section" aria-labelledby="decisionTitle">
-      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">{xingtuCandidates ? `本轮候选 ${xingtuCandidateTotal} · 历史近 24 小时` : `近 24 小时 · 最近 ${visibleDecisions.length} 条`}</span></div>
+      <div className="section-heading"><h2 id="decisionTitle">最近记录</h2><span className="section-meta">{huxuanCandidates ? `本轮候选 ${huxuanCandidateTotal} · 历史近 24 小时` : xingtuCandidates ? `本轮候选 ${xingtuCandidateTotal} · 历史近 24 小时` : `近 24 小时 · 最近 ${visibleDecisions.length} 条`}</span></div>
       {xingtuCandidates && candidates.length ? <p className="decision-list-note">最近 {candidates.length} 个本轮候选与处理记录按时间显示；后续命中规避词的账号会从候选中移除。</p> : null}
       <div className="decision-list" id="recentDecisionList">
         {entries.length === 0 ? <p className="empty-state">开始运行后，这里会显示最近处理的账号。</p> : null}
         {entries.map(entry => {
           if (entry.candidate) return <XingtuCandidateEntry key={entry.key} row={entry.candidate} now={now} label={xingtuFinalized?'本轮已保存':'本轮候选'} />;
+          if (entry.huxuan) return <HuxuanCandidateEntry key={entry.key} row={entry.huxuan} now={now} taskName={taskName} label={entry.huxuan.completedAt?'采集完成':huxuanFinalized?'本轮已保存':'本轮候选'} />;
           const decision = entry.decision!;
           if (decision.code === 'XINGTU_OBSERVED' && decision.xingtuCreator) return <XingtuCandidateEntry key={entry.key} row={{
             name:decision.accountName || '未识别账号',avatarUrl:decision.avatarUrl,profileUrl:decision.profileUrl,
@@ -166,6 +171,22 @@ export function RecentDecisions({ now, history = [], total = 0, xingtuCandidates
       </div>
     </section>
   );
+}
+
+function HuxuanCandidateEntry({row,now,taskName,label}:{row:HuxuanCandidate;now:number;taskName:string;label:string}) {
+  const facts=[row.followerCount && `粉丝 ${row.followerCount}`,row.shortPrice!=null && `1–60秒报价 ¥${row.shortPrice.toLocaleString('zh-CN')}`,row.longPrice!=null && `60秒以上报价 ¥${row.longPrice.toLocaleString('zh-CN')}`].filter(Boolean);
+  const at=row.completedAt || row.observedAt;
+  return <article className="decision-entry">
+    <div className="decision-row">
+      {row.avatarUrl ? <DecisionAvatar url={row.avatarUrl} name={row.authorName} /> : null}
+      <div className="decision-copy">
+        <div className="decision-main"><span className="decision-name">{row.authorName}</span><span className="decision-label review">{label}</span></div>
+        <div className="decision-reason decision-meta"><span className="decision-source">腾讯互选 · {taskName}</span></div>
+        {facts.length ? <div className="decision-reason">{facts.join(' · ')}</div> : null}
+      </div>
+      {at ? <time className="decision-time" dateTime={at}>{formatRelativeTime(at,now)}</time> : null}
+    </div>
+  </article>;
 }
 
 function XingtuCandidateEntry({ row, now, label }: { row: XingtuCandidate; now: number; label: string }) {

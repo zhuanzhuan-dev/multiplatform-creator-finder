@@ -15,6 +15,7 @@ import { rowAccountKey } from './lib/feigua-parser.js';
 import { createFeiguaRuntime, FEIGUA_ALARM, FEIGUA_STOP_ALARM } from "./lib/feigua-task.js";
 import { createXingtuRuntime, XINGTU_ALARM, XINGTU_STOP_ALARM } from "./lib/xingtu-task.js";
 import { createHuxuanRuntime, defaultHuxuanSettings, HUXUAN_ALARM } from "./lib/huxuan-task.js";
+import { huxuanContext, HUXUAN_CHANNEL } from './lib/huxuan-api.js';
 import { normalizeHuxuanObservation, huxuanObservationRecord } from "./lib/huxuan-collection.js";
 import { canonicalXingtuPageUrl } from './lib/xingtu-parser.js';
 import { restoreEngagement } from "./lib/engagement.js";
@@ -303,13 +304,13 @@ async function controlTask(message){
   if(message.type!=='DRA_START' && message.runId && message.runId!==task.state().runId)throw Error('任务已变化，请刷新状态后重试');
   if(message.type==='DRA_PAUSE'){await task.pause('用户暂停');return {ok:true,state:task.state()};}
   if(message.type==='DRA_STOP')return {ok:true,state:await task.stop()};
-  if(message.type==='DRA_RESUME')return {ok:true,state:await task.resume({windowId:message.windowId,target:configurationFor(selection).settings.target})};
+  if(message.type==='DRA_RESUME')return {ok:true,state:await task.resume({windowId:message.windowId,tabId:message.tabId,target:configurationFor(selection).settings.target})};
   let tab=await chrome.tabs.get(message.tabId);
   const entry=instances.get(selection),platform=entry?.platform || selection;
   if(['feigua','xingtu','huxuan'].includes(platform)){
     const route=resolveRoute(tab.pendingUrl || tab.url || '');
     if(route?.platform===platform && route.runnable && !ownedElsewhere(tab.id,selection))return {ok:true,state:await task.start(tab.id)};
-    tab=await task.openPage({windowId:tab.windowId});return {ok:true,state:await task.start(tab.id)};
+    tab=await task.openPage({windowId:tab.windowId,tabId:tab.id});return {ok:true,state:await task.start(tab.id)};
   }
   if(ownedElsewhere(tab.id,selection) && entry?.platform!=='douyin'){
     const base=platform==='bilibili-popular'?'bilibili':platform;
@@ -583,7 +584,8 @@ async function initialize() {
     ...huxuan.storage(),
     draHuxuanConfig:huxuanConfig,
       ...bilibili.storage(),
-      ...bilibiliPopular.storage()
+      ...bilibiliPopular.storage(),
+      ...instances.storage()
     });
     await feigua.timers();
     await xingtu.timers();
@@ -876,9 +878,34 @@ async function sendTabMessage(tabId, message, attempts = 8) {
   throw lastError || new Error("无法连接当前平台页面脚本");
 }
 
+const huxuanContentRecoveries = new Map();
+async function restoreHuxuanContent(tab) {
+  if(huxuanContentRecoveries.has(tab.id))return huxuanContentRecoveries.get(tab.id);
+  const restoring=(async()=>{
+    // MAIN-world listeners survive extension reloads. Keep the existing bridge
+    // and its captured filters instead of installing a second empty bridge.
+    const results=await chrome.scripting.executeScript({target:{tabId:tab.id,frameIds:[0]},world:'MAIN',args:[HUXUAN_CHANNEL],func:channel=>new Promise(resolve=>{
+      const requestId=crypto.randomUUID();
+      const finish=present=>{clearTimeout(timer);window.removeEventListener('message',receive);resolve(present);};
+      const receive=event=>{if(event.source===window && event.origin===location.origin && event.data?.channel===channel && event.data.direction==='response' && event.data.requestId===requestId)finish(true);};
+      const timer=setTimeout(()=>finish(false),1500);
+      window.addEventListener('message',receive);
+      window.postMessage({channel,direction:'request',requestId,action:'status'},location.origin);
+    })});
+    if(!results.some(result=>result.result===true))await chrome.scripting.executeScript({target:{tabId:tab.id,frameIds:[0]},world:'MAIN',files:['page/huxuan-page-bridge.js']});
+    await chrome.scripting.executeScript({target:{tabId:tab.id,frameIds:[0]},files:['content/huxuan-content.js']});
+    const status=await sendTabMessage(tab.id,{type:'DRA_LOOP_STATUS'},3).catch(()=>null);
+    if(!status?.ok)throw Error('互选采集脚本未连接，请检查插件的网站访问权限后重试');
+    return tab;
+  })().finally(()=>huxuanContentRecoveries.delete(tab.id));
+  huxuanContentRecoveries.set(tab.id,restoring);
+  return restoring;
+}
+
 async function ensureContentRuntime(tab) {
   const existing = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 1).catch(() => null);
   if (existing?.ok) return tab;
+  if(huxuanContext(tab.url || tab.pendingUrl || ''))return restoreHuxuanContent(tab);
   await chrome.tabs.reload(tab.id);
   const reloaded = await waitForTabComplete(tab.id);
   const status = await sendTabMessage(tab.id, { type: "DRA_LOOP_STATUS" }, 12).catch(() => null);
@@ -1657,11 +1684,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const feigua=instances.get(selectedState.taskId)?.platform==='feigua'?instances.get(selectedState.taskId).runtime:defaultRuntime('feigua');
         const xingtu=instances.get(selectedState.taskId)?.platform==='xingtu'?instances.get(selectedState.taskId).runtime:defaultRuntime('xingtu');
         const huxuan=instances.get(selectedState.taskId)?.platform==='huxuan'?instances.get(selectedState.taskId).runtime:defaultRuntime('huxuan');
+        const huxuanCollection=huxuan.collection(),huxuanPage=huxuanCollection?.capture?.page;
         return {
           ok: true,
           state: {...selectedState,...(selectedState.route?.platform==='douyin'?{ipCapture:profileNetwork.status(selectedState.feedTabId)}:{})},
           tasks: taskStates(),
-          huxuan:{pageCount:huxuan.collection()?.pages.length || 0,pageNumber:huxuan.state().lastPageNumber || "",finalized:huxuan.collection()?.finalized === true,candidates:huxuan.collection()?.recentRows || []},
+          huxuan:{pageCount:huxuanCollection?.pages.length || 0,listPageCount:huxuanCollection?.listPages.length || 0,pageNumber:huxuan.state().lastPageNumber || "",finalized:huxuanCollection?.finalized === true,candidates:huxuanCollection?.recentRows || [],currentPage:huxuanPage?{pageNumber:huxuanPage.pageNumber,total:huxuanPage.rows.length,completed:huxuanPage.rows.filter(row=>huxuanCollection.enrichedAccounts?.[row.authorId]).length}:null},
           feigua: {
             pageCount:feigua.collection()?.pages?.length || 0,
             pageNumber:feigua.state().lastPageNumber || '',
@@ -1722,8 +1750,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         requireExtensionPage(sender);
         if(huxuan.active())throw Error('请先暂停互选采集再修改设置');
         const maxPages=Number(message.maxPages),minSeconds=Number(message.minSeconds),maxSeconds=Number(message.maxSeconds);
-        if(!Number.isInteger(maxPages)||maxPages<1||maxPages>500||!Number.isFinite(minSeconds)||minSeconds<1||!Number.isFinite(maxSeconds)||maxSeconds<minSeconds||maxSeconds>30)throw Error('请填写1至500页，及1至30秒的有效等待区间');
-        huxuanConfig={settings:{...huxuanConfig.settings,huxuanTarget:{maxPages},huxuanDelay:{minSeconds,maxSeconds}},rules:{},settingsDraft:null};
+        const videoMaxPages=Number(message.videoMaxPages ?? 1);
+        if(!Number.isSafeInteger(videoMaxPages)||videoMaxPages<1)throw Error('视频页数须为正整数');
+        const pageMinSeconds=Number(message.pageMinSeconds),pageMaxSeconds=Number(message.pageMaxSeconds);
+        const validInterval=(min,max)=>Number.isFinite(min)&&Number.isFinite(max)&&min>=0&&max>=min&&max<=Number.MAX_SAFE_INTEGER/1000;
+        if(!Number.isInteger(maxPages)||maxPages<1||maxPages>500||!validInterval(minSeconds,maxSeconds)||!validInterval(pageMinSeconds,pageMaxSeconds))throw Error('请填写1至500页；等待时间须为非负数，最长等待须大于或等于最短等待');
+        huxuanConfig={settings:{...huxuanConfig.settings,huxuanTarget:{maxPages},huxuanVideoMaxPages:videoMaxPages,huxuanDelay:{minSeconds,maxSeconds},huxuanPageDelay:{minSeconds:pageMinSeconds,maxSeconds:pageMaxSeconds}},rules:{},settingsDraft:null};
         await persistWorkData();return {ok:true};
       }
       case "DRA_OPEN_XINGTU": {

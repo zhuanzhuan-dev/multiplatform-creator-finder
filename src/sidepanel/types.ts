@@ -80,6 +80,11 @@ export interface RunState {
   keepAliveAt?: string;
   runtime?: {
     phase?: string;
+    authorName?: string;
+    dataset?: string;
+    pageIndex?: number;
+    received?: number;
+    total?: number;
     deadlineAt?: number;
     lastTransitionAt?: number;
     plannedDwellSeconds?: number;
@@ -130,8 +135,10 @@ export interface ScheduleSettings {
 }
 
 export interface Settings {
+  huxuanVideoMaxPages?: number;
   huxuanTarget?: {maxPages:number};
   huxuanDelay?: {minSeconds:number;maxSeconds:number};
+  huxuanPageDelay?: {minSeconds:number;maxSeconds:number};
   feiguaTarget?: { maxPages?: number };
   feiguaDelay?: { minSeconds: number; maxSeconds: number };
   xingtuTarget?: { maxPages?: number };
@@ -168,7 +175,7 @@ export interface CloudState {
 }
 
 export interface Snapshot {
-  huxuan?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{authorName:string;authorId:string;followerCount:string;avatarUrl?:string}[]};
+  huxuan?: {pageCount:number;listPageCount?:number;pageNumber:string;finalized:boolean;currentPage?:{pageNumber:number;completed:number;total:number}|null;candidates:{authorName:string;authorId:string;followerCount:string;avatarUrl?:string;profileUrl?:string;observedAt?:string;completedAt?:string;shortPrice?:number|null;longPrice?:number|null}[]};
   pageRoute?: {platform:string;surface:string;label:string}|null;
   browsing?: {enabled:boolean;count:number;lastCapturedAt?:string;lastPageUrl?:string;lastError?:string};
   feigua?: {pageCount:number;pageNumber:string;finalized:boolean;candidates:{name:string;followers:string;avatarUrl?:string;profileUrl?:string;videos?:{videoId?:string;title?:string;coverUrl?:string;videoUrl?:string;durationSeconds?:number|null;metrics?:Record<string,string>;hotWords?:string[];observedAt?:string}[]}[]};
